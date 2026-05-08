@@ -44,6 +44,7 @@ import {
   Check,
   CheckSquare,
   FileDown,
+  FileSpreadsheet,
   Settings,
   Users,
   Trash2,
@@ -1227,6 +1228,61 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
   const pendingRequests = filterProcurements(procurements.filter(p => ['REQUESTED', 'PENDING'].includes(p.status)));
   const reviewHistory = filterProcurements(procurements.filter(p => ['APPROVED', 'REJECTED', 'PURCHASED', 'NOTE_APPROVED', 'PAYMENT_DONE'].includes(p.status)));
 
+  const exportToCSV = () => {
+    try {
+      const filteredProcurements = filterProcurements(procurements);
+      
+      if (filteredProcurements.length === 0) {
+        showAlert('No records found for the selected filters.', 'Filter Empty');
+        return;
+      }
+
+      const headers = [
+        'Date',
+        'Requester',
+        'Plant/Section',
+        'Item Description',
+        'Quantity',
+        'Unit',
+        'Expected Rate',
+        'Total Amount',
+        'Vendor',
+        'Status',
+        'Bulk ID',
+        'Closing Date'
+      ].join(',');
+
+      const rows = filteredProcurements.map(p => {
+        return [
+          new Date(p.requestDate).toLocaleDateString(),
+          `"${(p.requestName || p.userName || 'N/A').replace(/"/g, '""')}"`,
+          `"${(p.plantName || 'N/A').replace(/"/g, '""')}"`,
+          `"${p.itemDescription.replace(/"/g, '""')}"`,
+          p.qty,
+          p.unit,
+          p.expectedRate,
+          p.qty * p.expectedRate,
+          `"${(p.vendorName || 'N/A').replace(/"/g, '""')}"`,
+          p.status,
+          `"${(p.bulkId || 'N/A').replace(/"/g, '""')}"`,
+          p.closingDate ? new Date(p.closingDate).toLocaleDateString() : 'N/A'
+        ].join(',');
+      }).join('\n');
+
+      const csvContent = "data:text/csv;charset=utf-8," + headers + '\n' + rows;
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `procurement_data_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('CSV Export Error:', error);
+      showAlert('Failed to export CSV. Please try again.', 'Export Error');
+    }
+  };
+
   const exportToPDF = () => {
     try {
       const filteredProcurements = filterProcurements(procurements);
@@ -1471,11 +1527,19 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
           </div>
           
           <button 
+            onClick={exportToCSV}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all border border-emerald-100 shadow-sm h-[38px]"
+          >
+            <FileSpreadsheet size={16} />
+            CSV
+          </button>
+
+          <button 
             onClick={exportToPDF}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all border border-indigo-100 shadow-sm h-[38px]"
           >
             <FileDown size={16} />
-            Export PDF
+            PDF
           </button>
 
           {(startDate || endDate || searchQuery) && (
