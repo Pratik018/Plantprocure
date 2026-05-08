@@ -1191,36 +1191,48 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
   showConfirm: (m: string, oc: () => void, t?: string) => void,
   sendNotification: any
 }) {
-  const pendingRequests = procurements.filter(p => ['REQUESTED', 'PENDING'].includes(p.status));
-  const reviewHistory = procurements.filter(p => ['APPROVED', 'REJECTED', 'PURCHASED', 'NOTE_APPROVED', 'PAYMENT_DONE'].includes(p.status));
   const [updating, setUpdating] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkRemarks, setBulkRemarks] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showConfirmReset, setShowConfirmReset] = useState(false);
   
-  // Date filters for PDF
+  // Date filters
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  const [showConfirmReset, setShowConfirmReset] = useState(false);
-
-  const exportToPDF = () => {
-    try {
-      let filteredProcurements = [...procurements];
+  const filterProcurements = (items: Procurement[]) => {
+    return items.filter(p => {
+      const matchesSearch = 
+        p.itemDescription.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (p.requestName || p.userName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (p.vendorName || '').toLowerCase().includes(searchQuery.toLowerCase());
       
+      let matchesDate = true;
       if (startDate) {
         const start = new Date(startDate);
         start.setHours(0, 0, 0, 0);
-        filteredProcurements = filteredProcurements.filter(p => new Date(p.requestDate) >= start);
+        matchesDate = matchesDate && new Date(p.requestDate) >= start;
       }
-      
       if (endDate) {
         const end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
-        filteredProcurements = filteredProcurements.filter(p => new Date(p.requestDate) <= end);
+        matchesDate = matchesDate && new Date(p.requestDate) <= end;
       }
+      
+      return matchesSearch && matchesDate;
+    });
+  };
 
+  const pendingRequests = filterProcurements(procurements.filter(p => ['REQUESTED', 'PENDING'].includes(p.status)));
+  const reviewHistory = filterProcurements(procurements.filter(p => ['APPROVED', 'REJECTED', 'PURCHASED', 'NOTE_APPROVED', 'PAYMENT_DONE'].includes(p.status)));
+
+  const exportToPDF = () => {
+    try {
+      const filteredProcurements = filterProcurements(procurements);
+      
       if (filteredProcurements.length === 0) {
-        showAlert('No records found for the selected date range.', 'Filter Empty');
+        showAlert('No records found for the selected filters.', 'Filter Empty');
         return;
       }
 
@@ -1427,6 +1439,19 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
         
         <div className="flex flex-wrap gap-4 items-end">
           <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">Search Items/Requester</span>
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input 
+                type="text"
+                placeholder="Search..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 pr-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white shadow-sm w-48 md:w-64"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
             <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">From Request Date</span>
             <input 
               type="date"
@@ -1452,6 +1477,20 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
             <FileDown size={16} />
             Export PDF
           </button>
+
+          {(startDate || endDate || searchQuery) && (
+            <button 
+              onClick={() => {
+                setStartDate('');
+                setEndDate('');
+                setSearchQuery('');
+              }}
+              className="h-[38px] px-3 py-2 hover:bg-rose-50 text-rose-600 font-bold text-[10px] uppercase tracking-wider transition-colors rounded-xl flex items-center gap-1.5"
+            >
+              <X size={12} />
+              Reset Filters
+            </button>
+          )}
 
           {showConfirmReset ? (
             <div className="flex items-center gap-2 bg-rose-50 p-1 rounded-xl border border-rose-200 animate-in fade-in slide-in-from-right-4">
@@ -1645,10 +1684,31 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
 
 function TrackingDashboard({ procurements }: { procurements: Procurement[] }) {
   const [filter, setFilter] = useState<ProcurementStatus | 'ALL'>('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   
-  const filtered = filter === 'ALL' 
-    ? procurements 
-    : procurements.filter(p => p.status === filter);
+  const filtered = procurements.filter(p => {
+    const matchesStatus = filter === 'ALL' || p.status === filter;
+    const matchesSearch = 
+      p.itemDescription.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (p.requestName || p.userName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (p.vendorName || '').toLowerCase().includes(searchQuery.toLowerCase());
+    
+    let matchesDate = true;
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      matchesDate = matchesDate && new Date(p.requestDate) >= start;
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      matchesDate = matchesDate && new Date(p.requestDate) <= end;
+    }
+    
+    return matchesStatus && matchesSearch && matchesDate;
+  });
 
   return (
     <div className="space-y-6">
@@ -1657,14 +1717,61 @@ function TrackingDashboard({ procurements }: { procurements: Procurement[] }) {
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Track Status</h2>
           <p className="text-slate-500">Monitor the lifecycle of your requests</p>
         </div>
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0 scrollbar-hide">
-          <Filter size={16} className="text-slate-400 shrink-0" />
-          <FilterButton active={filter === 'ALL'} label="All" onClick={() => setFilter('ALL')} />
-          <FilterButton active={filter === 'REQUESTED'} label="Pending Admin" onClick={() => setFilter('REQUESTED')} />
-          <FilterButton active={filter === 'APPROVED'} label="Approved" onClick={() => setFilter('APPROVED')} />
-          <FilterButton active={filter === 'PURCHASED'} label="Purchased" onClick={() => setFilter('PURCHASED')} />
-          <FilterButton active={filter === 'PAYMENT_DONE'} label="Completed" onClick={() => setFilter('PAYMENT_DONE')} />
+        <div className="flex flex-col md:flex-row items-center gap-4">
+          <div className="relative w-full md:w-64">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input 
+              type="text"
+              placeholder="Search items, requesters..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white shadow-sm"
+            />
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0 scrollbar-hide">
+            <Filter size={16} className="text-slate-400 shrink-0" />
+            <FilterButton active={filter === 'ALL'} label="All" onClick={() => setFilter('ALL')} />
+            <FilterButton active={filter === 'REQUESTED'} label="Pending Admin" onClick={() => setFilter('REQUESTED')} />
+            <FilterButton active={filter === 'APPROVED'} label="Approved" onClick={() => setFilter('APPROVED')} />
+            <FilterButton active={filter === 'PURCHASED'} label="Purchased" onClick={() => setFilter('PURCHASED')} />
+            <FilterButton active={filter === 'PAYMENT_DONE'} label="Completed" onClick={() => setFilter('PAYMENT_DONE')} />
+          </div>
         </div>
+      </div>
+
+      <div className="flex flex-wrap gap-4 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">From Date</span>
+          <input 
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="px-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-emerald-50/30"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">To Date</span>
+          <input 
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="px-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-emerald-50/30"
+          />
+        </div>
+        {(startDate || endDate || searchQuery || filter !== 'ALL') && (
+          <button 
+            onClick={() => {
+              setStartDate('');
+              setEndDate('');
+              setSearchQuery('');
+              setFilter('ALL');
+            }}
+            className="mt-auto px-4 py-2 hover:bg-rose-50 text-rose-600 font-bold text-[10px] uppercase tracking-wider transition-colors rounded-xl flex items-center gap-1.5"
+          >
+            <X size={12} />
+            Reset Filters
+          </button>
+        )}
       </div>
 
       <div className="grid gap-4">
