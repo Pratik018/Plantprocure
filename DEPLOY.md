@@ -20,6 +20,12 @@ Every time you push to the `main` branch, the GitHub Action I created (`.github/
 2. Build the project.
 3. Upload the files to GitHub Pages.
 
-## Step 4: Routing (IMPORTANT)
-GitHub Pages does not natively support Single Page Application (SPA) routing (like `/add-request`). If you refresh the page on a sub-path, you might get a 404.
-- **Solution:** I have configured the app to work with standard paths, but for GitHub Pages, it is often easier to use a **Hash Router** if you encounter 404 errors on refresh.
+## Step 4: Base Path and Configuration
+I have configured `vite.config.ts` with `base: './'`. This ensures that your assets (images, JS, CSS) load correctly regardless of your repository name.
+
+## Step 5: Troubleshooting 404 Errors
+If you see a 404 error:
+1. **Wait for the Action:** Check the **Actions** tab in your GitHub repository. The deployment takes 1-2 minutes to finish after you push code.
+2. **Correct URL:** Ensure you are visiting `https://yourusername.github.io/your-repository-name/` (don't forget the trailing slash).
+3. **Authorized Domains:** Double check Step 1. Firebase will block the app if the domain is not authorized.
+4. **.nojekyll:** I have added a `.nojekyll` file in the `public` folder to prevent GitHub from hiding important files.
