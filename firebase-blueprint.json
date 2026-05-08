@@ -1,0 +1,109 @@
+{
+  "entities": {
+    "Procurement": {
+      "title": "Procurement Request",
+      "description": "A procurement record tracking the lifecycle from request to payment.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "requestDate": { "type": "string", "format": "date-time" },
+        "requestName": { "type": "string" },
+        "itemDescription": { "type": "string" },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string" },
+        "estCost": { "type": "number" },
+        "purpose": { "type": "string" },
+        "priority": { "type": "string", "enum": ["Low", "Medium", "High", "Urgent"] },
+        "status": { "type": "string", "enum": ["REQUESTED", "APPROVED", "PENDING", "REJECTED", "PURCHASED", "NOTE_APPROVED", "PAYMENT_DONE"] },
+        "adminRemarks": { "type": "string" },
+        "purchaseDate": { "type": "string", "format": "date-time" },
+        "vendorName": { "type": "string" },
+        "actualCost": { "type": "number" },
+        "invoiceNumber": { "type": "string" },
+        "purchaseRemarks": { "type": "string" },
+        "purchaserName": { "type": "string" },
+        "purchaserId": { "type": "string" },
+        "approvalNoteNo": { "type": "string" },
+        "approvalNoteDate": { "type": "string", "format": "date-time" },
+        "paymentDate": { "type": "string", "format": "date-time" },
+        "paymentAmount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "requestDate", "itemDescription", "quantity", "unit", "status"]
+    },
+    "Notification": {
+      "title": "In-app Notification",
+      "description": "Alert for users regarding their procurement requests.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["STATUS_CHANGE", "NEW_REQUEST"] },
+        "procurementId": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "message", "isRead", "createdAt"]
+    },
+    "ChatMessage": {
+      "title": "Chat Message",
+      "description": "A message sent between a user and the administration team.",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "senderEmail": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "chatId": { "type": "string", "description": "The UID of the non-admin user involved in the chat." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isAdminMessage": { "type": "boolean" },
+        "isRead": { "type": "boolean" }
+      },
+      "required": ["senderId", "text", "chatId", "createdAt", "isAdminMessage", "isRead"]
+    }
+  },
+  "firestore": {
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "Collection of user notifications."
+    },
+    "/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Collection of chat messages between users and admins."
+    },
+    "/procurements/{procurementId}": {
+      "schema": "Procurement",
+      "description": "Collection of all procurement records."
+    },
+    "/users/{userId}": {
+      "schema": {
+        "title": "User Profile",
+        "type": "object",
+        "properties": {
+          "email": { "type": "string" },
+          "displayName": { "type": "string" },
+          "lastLogin": { "type": "string", "format": "date-time" }
+        },
+        "required": ["email"]
+      },
+      "description": "Registered users of the application."
+    },
+    "/authorized_users/{email}": {
+      "schema": {
+        "title": "Authorized User",
+        "type": "object",
+        "properties": {
+          "email": { "type": "string" },
+          "role": { "type": "string", "enum": ["USER", "ADMIN"] },
+          "addedAt": { "type": "string", "format": "date-time" },
+          "addedBy": { "type": "string" }
+        },
+        "required": ["email", "role"]
+      },
+      "description": "Whitelist of users allowed to access the system."
+    }
+  }
+}

@@ -1,0 +1,176 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny Security Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Hardened Primitives ---
+    function isSignedIn() { return request.auth != null; }
+    function isEmailVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-\\.\\@]+$'); 
+    }
+
+    function isAdmin() { 
+      return isEmailVerified() && (
+        get(/databases/$(database)/documents/authorized_users/$(request.auth.token.email.lower())).data.role == 'ADMIN' ||
+        ( request.auth.token.email.lower() == "impratikpatra@gmail.com" )
+      );
+    }
+
+    function isAuthorized() {
+      return isEmailVerified() && (
+        isAdmin() ||
+        exists(/databases/$(database)/documents/authorized_users/$(request.auth.token.email.lower()))
+      );
+    }
+
+    // --- Validation Helpers ---
+    function isValidProcurement(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.requestName is string && data.requestName.size() <= 100 &&
+             data.itemDescription is string && data.itemDescription.size() <= 1000 &&
+             data.quantity is number &&
+             data.unit is string && data.unit.size() <= 20 &&
+             data.estCost is number &&
+             data.status in ["REQUESTED", "APPROVED", "PENDING", "REJECTED", "PURCHASED", "NOTE_APPROVED", "PAYMENT_DONE"] &&
+             (!('purpose' in data) || (data.purpose is string && data.purpose.size() <= 1000)) &&
+             (!('priority' in data) || (data.priority is string)) &&
+             (!('userName' in data) || (data.userName is string && data.userName.size() <= 128)) &&
+             (!('requestDate' in data) || (data.requestDate is string)) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp));
+    }
+
+    function isValidNotification(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.title is string && data.title.size() <= 100 &&
+             data.message is string && data.message.size() <= 1000 &&
+             data.isRead == false &&
+             data.createdAt == request.time &&
+             (!('procurementId' in data) || (data.procurementId is string && data.procurementId.size() <= 128)) &&
+             (!('type' in data) || (data.type is string));
+    }
+
+    function isValidMessage(data) {
+      return data.senderId is string && data.senderId.size() <= 128 &&
+             data.text is string && data.text.size() <= 5000 &&
+             data.chatId is string && data.chatId.size() <= 128 &&
+             data.isAdminMessage is bool &&
+             (data.isRead == false || data.isRead == true) &&
+             data.createdAt == request.time &&
+             (!('senderEmail' in data) || (data.senderEmail is string)) &&
+             (!('senderName' in data) || (data.senderName is string));
+    }
+
+    // --- Collection Rules ---
+
+    match /messages/{messageId} {
+      allow list: if isAuthorized() && (isAdmin() || resource.data.chatId == request.auth.uid);
+      allow get: if isAuthorized() && (isAdmin() || resource.data.chatId == request.auth.uid);
+      allow create: if isAuthorized() && 
+                    isValidMessage(incoming()) &&
+                    isValidId(messageId) &&
+                    incoming().senderId == request.auth.uid &&
+                    (isAdmin() ? true : (incoming().chatId == request.auth.uid && incoming().isAdminMessage == false));
+      allow update: if isAuthorized() && 
+                    (isAdmin() || resource.data.chatId == request.auth.uid) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['isRead']) &&
+                    incoming().isRead == true;
+      allow delete: if isAuthorized() && (isAdmin() || resource.data.chatId == request.auth.uid);
+    }
+
+    match /procurements/{procId} {
+      // Allow all authorized users to see all procurements
+      allow list: if isAuthorized();
+      allow get: if isAuthorized();
+      
+      allow create: if isAuthorized() && 
+                      isValidId(procId) &&
+                      isValidProcurement(incoming()) &&
+                      incoming().userId == request.auth.uid &&
+                      incoming().status == 'REQUESTED' &&
+                      incoming().createdAt == request.time &&
+                      incoming().keys().hasAll(['userId', 'userName', 'requestName', 'itemDescription', 'quantity', 'unit', 'estCost', 'purpose', 'priority', 'status', 'createdAt', 'updatedAt', 'requestDate']) &&
+                      incoming().size() == 13;
+
+      allow update: if isAuthorized() && isValidProcurement(incoming()) && (
+        isAdmin() || (
+          // Identity Check: Certain fields must remain immutable for non-admins
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          
+          // Action-Based Branching
+          (
+            // Action: Edit (Owner can only edit while in REQUESTED status)
+            incoming().userId == request.auth.uid &&
+            existing().status == 'REQUESTED' && 
+            incoming().status == 'REQUESTED' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['requestName', 'itemDescription', 'quantity', 'unit', 'estCost', 'purpose', 'priority', 'updatedAt'])
+          ) ||
+          (
+            // Action: Purchase Entry (Any authorized user)
+            existing().status == 'APPROVED' && 
+            incoming().status == 'PURCHASED' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'purchaseDate', 'vendorName', 'actualCost', 'invoiceNumber', 'purchaseRemarks', 'purchaserName', 'purchaserId', 'updatedAt'])
+          ) ||
+          (
+            // Action: Approval Note (Any authorized user)
+            existing().status == 'PURCHASED' && 
+            incoming().status == 'NOTE_APPROVED' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'approvalNoteNo', 'approvalNoteDate', 'updatedAt'])
+          ) ||
+          (
+            // Action: Final Payment (Any authorized user)
+            existing().status == 'NOTE_APPROVED' && 
+            incoming().status == 'PAYMENT_DONE' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentDate', 'paymentAmount', 'updatedAt'])
+          ) ||
+          (
+            // Action: Minor metadata update (staying in same status)
+            existing().status == incoming().status &&
+            !existing().status in ['PAYMENT_DONE', 'REJECTED'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt'])
+          )
+        )
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notifId} {
+      allow read, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthorized() && isValidNotification(incoming());
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      // List is allowed for authorized users to map admin emails to UIDs
+      allow list: if isAuthorized();
+      
+      allow create: if isSignedIn() && request.auth.uid == userId && 
+                      isValidId(userId) &&
+                      incoming().email == request.auth.token.email &&
+                      incoming().keys().hasAll(['email', 'displayName', 'lastLogin']) &&
+                      incoming().size() == 3;
+                      
+      allow update: if isSignedIn() && request.auth.uid == userId &&
+                      incoming().email == existing().email && // Email is immutable
+                      incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'lastLogin']);
+      
+      allow delete: if isAdmin();
+    }
+
+    match /authorized_users/{email} {
+      allow get: if isEmailVerified() && (request.auth.token.email.lower() == email.lower() || isAdmin());
+      allow list: if isAuthorized() && (resource.data.role == 'ADMIN' || isAdmin());
+      allow write: if isAdmin() && isValidId(email);
+    }
+  }
+}
