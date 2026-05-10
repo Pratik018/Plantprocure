@@ -61,7 +61,7 @@ import { format, differenceInDays } from 'date-fns';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-import { auth, db, signIn, signOut, handleFirestoreError, OperationType } from './lib/firebase';
+import { auth, db, signIn, signOut, handleFirestoreError, OperationType, signInWithEmail, signUpWithEmail } from './lib/firebase';
 import { Procurement, ProcurementStatus } from './types';
 
 type NotificationType = 'STATUS_CHANGE' | 'NEW_REQUEST' | 'INFO';
@@ -94,7 +94,19 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(false);
+  
+  // Auth states
+  const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [regFullName, setRegFullName] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [regSuccess, setRegSuccess] = useState(false);
+
   const [authorizedUsers, setAuthorizedUsers] = useState<{id: string, email: string, role?: 'USER' | 'ADMIN'}[]>([]);
+  const [accessRequests, setAccessRequests] = useState<{id: string, email: string, fullName: string, status: string, requestedAt: any}[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'request' | 'admin' | 'tracking' | 'purchase' | 'approval' | 'ledger' | 'settings'>('dashboard');
   const [procurements, setProcurements] = useState<Procurement[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -164,11 +176,23 @@ export default function App() {
       }
     });
 
+    let unsubscribeRequests: (() => void) | null = null;
+
+    if (isAdmin) {
+      const qRequests = query(collection(db, 'access_requests'), where('status', '==', 'PENDING'), orderBy('requestedAt', 'desc'));
+      unsubscribeRequests = onSnapshot(qRequests, (snapshot) => {
+        setAccessRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+      }, (error) => {
+        console.error('Access Requests Error:', error);
+      });
+    }
+
     return () => {
       unsubscribeAuth();
       if (unsubscribeAuthorized) unsubscribeAuthorized();
+      if (unsubscribeRequests) unsubscribeRequests();
     };
-  }, []);
+  }, [isAdmin]);
 
   // Fetch all authorized users for management
   useEffect(() => {
@@ -261,6 +285,40 @@ export default function App() {
     );
   }
 
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthLoading(true);
+
+    try {
+      if (authMode === 'LOGIN') {
+        const u = await signInWithEmail(email, password);
+        setAuthError(null);
+      } else {
+        if (password !== confirmPassword) {
+          throw new Error('Passwords do not match');
+        }
+        if (password.length < 6) {
+          throw new Error('Password must be at least 6 characters');
+        }
+        await signUpWithEmail(email, password, regFullName);
+        setRegSuccess(true);
+        setAuthMode('LOGIN');
+        setAuthError(null);
+      }
+    } catch (err: any) {
+      console.error("Auth helper error:", err);
+      // Clean up common Firebase error strings if they leak through
+      let msg = err.message || 'An authentication error occurred';
+      if (msg.includes('auth/email-already-in-use')) {
+        msg = 'This email is already registered. Please sign in instead.';
+      }
+      setAuthError(msg);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-50 p-4">
@@ -273,21 +331,115 @@ export default function App() {
             <ShieldCheck className="w-8 h-8 text-emerald-600" />
           </div>
           <h1 className="text-2xl font-bold text-slate-900 mb-2">PlantProcure Ledger</h1>
-          <p className="text-slate-500 mb-8">Sign in to manage your plant procurement requests and payments.</p>
+          <p className="text-slate-500 mb-8">
+            {authMode === 'LOGIN' 
+              ? 'Sign in to manage your plant procurement requests.' 
+              : 'Register your account for access approval.'}
+          </p>
           
+          {regSuccess && (
+            <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl text-sm font-medium border border-emerald-100">
+              Registration request sent! Please wait for administrator approval.
+            </div>
+          )}
+
+          {authError && (
+            <div className="mb-6 p-4 bg-rose-50 text-rose-600 rounded-xl text-sm font-medium border border-rose-100">
+              {authError}
+            </div>
+          )}
+
+          <form onSubmit={handleEmailAuth} className="space-y-4 mb-6 text-left">
+            {authMode === 'REGISTER' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Full Name</label>
+                <input 
+                  type="text" 
+                  value={regFullName}
+                  onChange={(e) => setRegFullName(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all text-sm"
+                  placeholder="Your Full Name"
+                  required
+                />
+              </div>
+            )}
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Email Address</label>
+              <input 
+                type="email" 
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all text-sm"
+                placeholder="email@example.com"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Password</label>
+              <input 
+                type="password" 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all text-sm"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+            {authMode === 'REGISTER' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Confirm Password</label>
+                <input 
+                  type="password" 
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all text-sm"
+                  placeholder="••••••••"
+                  required
+                />
+              </div>
+            )}
+            
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white rounded-xl py-3.5 font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 disabled:opacity-50"
+            >
+              {authLoading ? 'Please wait...' : (authMode === 'LOGIN' ? 'Sign In' : 'Register Account')}
+            </button>
+          </form>
+
+          <div className="relative mb-6">
+            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-100"></div></div>
+            <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-4 text-slate-400 font-bold tracking-widest uppercase">Or</span></div>
+          </div>
+
           <button
             onClick={signIn}
-            className="w-full flex items-center justify-center gap-3 bg-slate-900 text-white rounded-xl py-3 font-medium hover:bg-slate-800 transition-colors shadow-lg shadow-slate-200"
+            className="w-full flex items-center justify-center gap-3 bg-white border-2 border-slate-100 text-slate-700 rounded-xl py-3 font-bold hover:bg-slate-50 hover:border-slate-200 transition-all mb-6"
           >
-            <div className="w-5 h-5 bg-white text-slate-900 rounded flex items-center justify-center text-[10px] font-black">G</div>
+            <div className="w-5 h-5 bg-slate-900 text-white rounded flex items-center justify-center text-[10px] font-black">G</div>
             Sign in with Google
           </button>
+
+          <p className="text-sm text-slate-500">
+            {authMode === 'LOGIN' ? "Don't have an account?" : "Already have an account?"}{' '}
+            <button 
+              onClick={() => {
+                setAuthMode(authMode === 'LOGIN' ? 'REGISTER' : 'LOGIN');
+                setAuthError(null);
+              }}
+              className="text-emerald-600 font-bold hover:underline"
+            >
+              {authMode === 'LOGIN' ? 'Register Now' : 'Sign In'}
+            </button>
+          </p>
         </motion.div>
       </div>
     );
   }
 
   if (!isAuthorized) {
+    const isUnverified = user && !user.emailVerified;
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-50 p-4">
         <motion.div 
@@ -300,19 +452,41 @@ export default function App() {
           </div>
           <h1 className="text-2xl font-bold text-slate-900 mb-2">Access Restricted</h1>
           <p className="text-slate-500 mb-6 font-medium">
-            Your account <span className="text-slate-900 font-bold">({user.email})</span> is not authorized to access this system.
+            Your account <span className="text-slate-900 font-bold">({user.email})</span> is currently restricted.
           </p>
-          <div className="bg-slate-50 rounded-xl p-4 mb-8 text-sm text-slate-600 text-left">
-            <p className="font-bold mb-1">How to gain access:</p>
-            <p>Please contact an administrator for authorisation. Once added to the system, you will be able to access all features.</p>
+
+          <div className="space-y-4 mb-8">
+            {isUnverified && (
+              <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-sm text-amber-800 text-left">
+                <p className="font-bold mb-1">Email Not Verified</p>
+                <p>Firebase reports that your email address is not verified. Security rules require a verified email for submitting new requests and making updates.</p>
+                <p className="mt-2 font-medium">Please check your email and follow the verification link if you received one.</p>
+              </div>
+            )}
+            
+            <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 text-sm text-slate-600 text-left">
+              <p className="font-bold mb-1 font-sans text-slate-900">Not in Authorised List</p>
+              <p>You are not currently on the authorised users list. If you just registered, an administrator needs to approve your request.</p>
+              <p className="mt-2 text-slate-700">Please provide your email address <span className="font-bold">({user.email})</span> to an administrator to gain access.</p>
+            </div>
           </div>
-          <button
-            onClick={() => signOut()}
-            className="w-full flex items-center justify-center gap-2 bg-slate-200 text-slate-700 rounded-xl py-3 font-medium hover:bg-slate-300 transition-colors"
-          >
-            <LogOut size={18} />
-            Sign Out
-          </button>
+
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={() => window.location.reload()}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white rounded-xl py-3 font-medium hover:bg-emerald-700 transition-colors"
+            >
+              <Activity size={18} />
+              Retry Access
+            </button>
+            <button
+              onClick={() => signOut()}
+              className="w-full flex items-center justify-center gap-2 bg-slate-200 text-slate-700 rounded-xl py-3 font-medium hover:bg-slate-300 transition-colors"
+            >
+              <LogOut size={18} />
+              Sign Out & Switch Account
+            </button>
+          </div>
         </motion.div>
       </div>
     );
@@ -374,7 +548,7 @@ export default function App() {
                   onClick={() => { setActiveTab('admin'); setIsSidebarOpen(false); }}
                   icon={<ShieldCheck size={18} />}
                   label="Admin Review"
-                  badge={procurements.filter(p => p.status === 'REQUESTED' || p.status === 'PENDING').length}
+                  badge={procurements.filter(p => p.status === 'REQUESTED' || p.status === 'PENDING').length + accessRequests.length}
                 />
                 <NavItem 
                   active={activeTab === 'settings'} 
@@ -462,7 +636,7 @@ export default function App() {
               {activeTab === 'purchase' && <PurchaseEntry procurements={procurements} user={user} showAlert={showAlert} showConfirm={showConfirm} sendNotification={sendNotification} adminUids={adminUids} />}
               {activeTab === 'approval' && <ApprovalStatus procurements={procurements} sendNotification={sendNotification} adminUids={adminUids} user={user} />}
               {activeTab === 'ledger' && <PaymentLedger procurements={procurements} sendNotification={sendNotification} adminUids={adminUids} user={user} />}
-              {activeTab === 'settings' && isAdmin && <AdminManagement authorizedUsers={authorizedUsers} showAlert={showAlert} showConfirm={showConfirm} />}
+              {activeTab === 'settings' && isAdmin && <AdminManagement authorizedUsers={authorizedUsers} showAlert={showAlert} showConfirm={showConfirm} accessRequests={accessRequests} />}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -2502,25 +2676,68 @@ const AdminCard: React.FC<{
   );
 }
 
-function AdminManagement({ authorizedUsers, showAlert, showConfirm }: { 
+function AdminManagement({ authorizedUsers, showAlert, showConfirm, accessRequests }: { 
   authorizedUsers: {id: string, email: string, role?: 'USER' | 'ADMIN'}[],
   showAlert: (m: string, t?: string) => void,
-  showConfirm: (m: string, oc: () => void, t?: string) => void
+  showConfirm: (m: string, oc: () => void, t?: string) => void,
+  accessRequests: any[]
 }) {
   const [allUsers, setAllUsers] = useState<{uid: string, email: string, displayName: string}[]>([]);
   const [loading, setLoading] = useState(true);
   const [newAuthEmail, setNewAuthEmail] = useState('');
 
   useEffect(() => {
-    const q = query(collection(db, 'users'), orderBy('email'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const qUsers = query(collection(db, 'users'), orderBy('email'));
+    
+    const unsubscribeUsers = onSnapshot(qUsers, (snapshot) => {
       setAllUsers(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as any)));
       setLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribeUsers();
+    };
   }, []);
+
+  const approveRequest = async (reqId: string, email: string) => {
+    try {
+      // 1. Add to authorized_users
+      await setDoc(doc(db, 'authorized_users', email.toLowerCase()), {
+        email: email.toLowerCase(),
+        role: 'USER',
+        addedAt: serverTimestamp(),
+        addedBy: auth.currentUser?.email
+      });
+
+      // 2. Update request status
+      await updateDoc(doc(db, 'access_requests', reqId), {
+        status: 'APPROVED',
+        approvedAt: serverTimestamp(),
+        approvedBy: auth.currentUser?.email
+      });
+
+      showAlert(`Access approved for ${email}. They can now log in.`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `access_requests/${reqId}`);
+    }
+  };
+
+  const rejectRequest = async (reqId: string, email: string) => {
+    showConfirm(`Reject access request for ${email}?`, async () => {
+      try {
+        await updateDoc(doc(db, 'access_requests', reqId), {
+          status: 'REJECTED',
+          rejectedAt: serverTimestamp(),
+          rejectedBy: auth.currentUser?.email
+        });
+        showAlert(`Request for ${email} has been rejected.`);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, `access_requests/${reqId}`);
+      }
+    });
+  };
 
   const deleteUser = async (userUid: string, userEmail: string) => {
     if (userEmail.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase()) {
@@ -2598,6 +2815,50 @@ function AdminManagement({ authorizedUsers, showAlert, showConfirm }: {
 
   return (
     <div className="space-y-8">
+      {/* Pending Access Requests */}
+      {accessRequests.length > 0 && (
+        <div className="bg-amber-50 rounded-2xl shadow-sm border border-amber-200 overflow-hidden">
+          <div className="p-6 border-b border-amber-100 bg-amber-100/30">
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <Clock className="text-amber-600" size={20} />
+              Pending Access Requests
+              <span className="ml-2 bg-amber-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full">{accessRequests.length}</span>
+            </h2>
+            <p className="text-sm text-amber-700 mt-1">Review and approve new user registrations.</p>
+          </div>
+          <div className="p-6 space-y-4">
+            {accessRequests.map((req) => (
+              <div key={req.id} className="bg-white p-4 rounded-xl border border-amber-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 font-bold">
+                    {req.fullName?.[0] || '?'}
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">{req.fullName}</p>
+                    <p className="text-xs text-slate-500">{req.email}</p>
+                    <p className="text-[10px] text-slate-400 mt-1 italic">Requested {format(parseDate(req.requestedAt), 'MMM d, h:mm a')}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => approveRequest(req.id, req.email)}
+                    className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all flex items-center gap-1.5"
+                  >
+                    <Check size={14} /> Approve
+                  </button>
+                  <button 
+                    onClick={() => rejectRequest(req.id, req.email)}
+                    className="bg-white border border-rose-200 text-rose-600 px-4 py-2 rounded-lg text-xs font-bold hover:bg-rose-50 transition-all flex items-center gap-1.5"
+                  >
+                    <X size={14} /> Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Authorized Users Management */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-6 border-b border-slate-100 bg-slate-50">

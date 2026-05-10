@@ -4,8 +4,15 @@
  */
 
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { initializeFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { 
+  getAuth, 
+  GoogleAuthProvider, 
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail
+} from 'firebase/auth';
+import { initializeFirestore, doc, getDocFromServer, setDoc, serverTimestamp } from 'firebase/firestore';
 import firebaseConfigData from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfigData);
@@ -31,6 +38,53 @@ export async function signIn() {
     } else if (error.message?.includes('Cross-Origin-Opener-Policy')) {
       alert('A security policy (COOP) blocked the login popup. Please try opening the app in a new tab using the button in the top right.');
     }
+    throw error;
+  }
+}
+
+export async function signInWithEmail(email: string, pass: string) {
+  try {
+    const result = await signInWithEmailAndPassword(auth, email, pass);
+    return result.user;
+  } catch (error: any) {
+    console.error('Email sign in error:', error);
+    let message = 'Login failed. Please check your credentials.';
+    if (error.code === 'auth/user-not-found') message = 'No account found with this email.';
+    if (error.code === 'auth/wrong-password') message = 'Incorrect password.';
+    if (error.code === 'auth/invalid-email') message = 'Invalid email address.';
+    throw new Error(message);
+  }
+}
+
+export async function signUpWithEmail(email: string, pass: string, fullName: string) {
+  try {
+    const result = await createUserWithEmailAndPassword(auth, email, pass);
+    const user = result.user;
+    
+    // Create a pending access request
+    await setDoc(doc(db, 'access_requests', email.toLowerCase()), {
+      email: email.toLowerCase(),
+      fullName,
+      uid: user.uid,
+      status: 'PENDING',
+      requestedAt: serverTimestamp()
+    });
+    
+    return user;
+  } catch (error: any) {
+    console.error('Sign up error:', error);
+    let message = 'Registration failed.';
+    if (error.code === 'auth/email-already-in-use') message = 'A user with this email already exists.';
+    if (error.code === 'auth/weak-password') message = 'Password is too weak. Must be at least 6 characters.';
+    throw new Error(message);
+  }
+}
+
+export async function resetPassword(email: string) {
+  try {
+    await sendPasswordResetEmail(auth, email);
+  } catch (error: any) {
+    console.error('Password reset error:', error);
     throw error;
   }
 }

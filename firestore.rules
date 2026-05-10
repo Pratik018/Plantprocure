@@ -17,16 +17,21 @@ service cloud.firestore {
     }
 
     function isAdmin() { 
-      return isEmailVerified() && (
-        get(/databases/$(database)/documents/authorized_users/$(request.auth.token.email.lower())).data.role == 'ADMIN' ||
-        ( request.auth.token.email.lower() == "impratikpatra@gmail.com" )
+      let email = request.auth.token.email.lower();
+      let path = /databases/$(database)/documents/authorized_users/$(email);
+      let isBootstrap = email == "impratikpatra@gmail.com";
+      return isSignedIn() && (
+        (exists(path) && get(path).data.role == 'ADMIN') ||
+        isBootstrap
       );
     }
 
     function isAuthorized() {
-      return isEmailVerified() && (
-        isAdmin() ||
-        exists(/databases/$(database)/documents/authorized_users/$(request.auth.token.email.lower()))
+      let email = request.auth.token.email.lower();
+      let path = /databases/$(database)/documents/authorized_users/$(email);
+      let isBootstrap = email == "impratikpatra@gmail.com";
+      return isSignedIn() && (
+        isAdmin() || exists(path)
       );
     }
 
@@ -72,16 +77,16 @@ service cloud.firestore {
     match /messages/{messageId} {
       allow list: if isAuthorized() && (isAdmin() || resource.data.chatId == request.auth.uid);
       allow get: if isAuthorized() && (isAdmin() || resource.data.chatId == request.auth.uid);
-      allow create: if isAuthorized() && 
+      allow create: if isAuthorized() && isEmailVerified() && 
                     isValidMessage(incoming()) &&
                     isValidId(messageId) &&
                     incoming().senderId == request.auth.uid &&
                     (isAdmin() ? true : (incoming().chatId == request.auth.uid && incoming().isAdminMessage == false));
-      allow update: if isAuthorized() && 
+      allow update: if isAuthorized() && isEmailVerified() && 
                     (isAdmin() || resource.data.chatId == request.auth.uid) &&
                     incoming().diff(existing()).affectedKeys().hasOnly(['isRead']) &&
                     incoming().isRead == true;
-      allow delete: if isAuthorized() && (isAdmin() || resource.data.chatId == request.auth.uid);
+      allow delete: if isAdmin();
     }
 
     match /procurements/{procId} {
@@ -89,7 +94,7 @@ service cloud.firestore {
       allow list: if isAuthorized();
       allow get: if isAuthorized();
       
-      allow create: if isAuthorized() && 
+      allow create: if isAuthorized() && isEmailVerified() && 
                       isValidId(procId) &&
                       isValidProcurement(incoming()) &&
                       incoming().userId == request.auth.uid &&
@@ -98,7 +103,7 @@ service cloud.firestore {
                       incoming().keys().hasAll(['userId', 'userName', 'requestName', 'itemDescription', 'quantity', 'unit', 'estCost', 'purpose', 'priority', 'status', 'createdAt', 'updatedAt', 'requestDate']) &&
                       incoming().size() == 13;
 
-      allow update: if isAuthorized() && isValidProcurement(incoming()) && (
+      allow update: if isAuthorized() && isEmailVerified() && isValidProcurement(incoming()) && (
         isAdmin() || (
           // Identity Check: Certain fields must remain immutable for non-admins
           incoming().userId == existing().userId &&
@@ -144,8 +149,8 @@ service cloud.firestore {
 
     match /notifications/{notifId} {
       allow read, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isAuthorized() && isValidNotification(incoming());
-      allow update: if isSignedIn() && resource.data.userId == request.auth.uid &&
+      allow create: if isAuthorized() && isEmailVerified() && isValidNotification(incoming());
+      allow update: if isSignedIn() && isEmailVerified() && resource.data.userId == request.auth.uid &&
                     incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
     }
 
@@ -156,21 +161,33 @@ service cloud.firestore {
       
       allow create: if isSignedIn() && request.auth.uid == userId && 
                       isValidId(userId) &&
-                      incoming().email == request.auth.token.email &&
+                      incoming().email.lower() == request.auth.token.email.lower() &&
                       incoming().keys().hasAll(['email', 'displayName', 'lastLogin']) &&
                       incoming().size() == 3;
                       
       allow update: if isSignedIn() && request.auth.uid == userId &&
-                      incoming().email == existing().email && // Email is immutable
+                      incoming().email.lower() == existing().email.lower() &&
                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'lastLogin']);
       
       allow delete: if isAdmin();
     }
 
     match /authorized_users/{email} {
-      allow get: if isEmailVerified() && (request.auth.token.email.lower() == email.lower() || isAdmin());
+      allow get: if isSignedIn() && (request.auth.token.email.lower() == email.lower() || isAdmin());
       allow list: if isAuthorized() && (resource.data.role == 'ADMIN' || isAdmin());
       allow write: if isAdmin() && isValidId(email);
+    }
+
+    match /access_requests/{email} {
+      allow get: if isSignedIn() && (request.auth.token.email.lower() == email.lower() || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && 
+                    request.auth.token.email.lower() == email.lower() && 
+                    isValidId(email) &&
+                    incoming().status == 'PENDING' &&
+                    incoming().requestedAt == request.time;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
     }
   }
 }
