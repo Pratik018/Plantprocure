@@ -4,7 +4,7 @@
  */
 
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithRedirect } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { initializeFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfigData from '../../firebase-applet-config.json';
 
@@ -20,11 +20,16 @@ export const googleProvider = new GoogleAuthProvider();
 
 export async function signIn() {
   try {
-    await signInWithRedirect(auth, googleProvider);
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
   } catch (error: any) {
     console.error('Sign in error:', error);
-    if (error.message?.includes('Cross-Origin-Opener-Policy')) {
-      alert('A security policy blocked the login. Please try opening the app in a new tab.');
+    if (error.code === 'auth/popup-blocked') {
+      alert('The login popup was blocked. Please enable popups for this site or open the app in a new tab.');
+    } else if (error.code === 'auth/popup-closed-by-user') {
+      // Normal closure
+    } else if (error.message?.includes('Cross-Origin-Opener-Policy')) {
+      alert('A security policy (COOP) blocked the login popup. Please try opening the app in a new tab using the button in the top right.');
     }
     throw error;
   }

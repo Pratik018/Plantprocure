@@ -274,6 +274,7 @@ export default function App() {
           </div>
           <h1 className="text-2xl font-bold text-slate-900 mb-2">PlantProcure Ledger</h1>
           <p className="text-slate-500 mb-8">Sign in to manage your plant procurement requests and payments.</p>
+          
           <button
             onClick={signIn}
             className="w-full flex items-center justify-center gap-3 bg-slate-900 text-white rounded-xl py-3 font-medium hover:bg-slate-800 transition-colors shadow-lg shadow-slate-200"
