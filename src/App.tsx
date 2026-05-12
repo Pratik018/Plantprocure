@@ -1222,6 +1222,20 @@ function Dashboard({ procurements, setActiveTab, isAdmin }: { procurements: Proc
   const totalActive = procurements.filter(p => p.status !== 'PAYMENT_DONE' && p.status !== 'REJECTED').length;
   const recentItems = procurements.slice(0, 5);
 
+  const vendorStats = procurements
+    .filter(p => p.status === 'PURCHASED' && p.vendorName)
+    .reduce((acc, p) => {
+      const vendor = p.vendorName || 'Others';
+      if (!acc[vendor]) acc[vendor] = { count: 0, amount: 0 };
+      acc[vendor].count += 1;
+      acc[vendor].amount += (p.actualCost || 0);
+      return acc;
+    }, {} as Record<string, { count: number, amount: number }>);
+
+  const vendorList = Object.entries(vendorStats)
+    .map(([name, data]) => ({ name, ...data }))
+    .sort((a, b) => b.amount - a.amount);
+
   return (
     <div className="space-y-8">
       <div>
@@ -1306,6 +1320,50 @@ function Dashboard({ procurements, setActiveTab, isAdmin }: { procurements: Proc
           </div>
         </div>
       </div>
+
+      {vendorList.length > 0 && (
+        <div className="space-y-4 pt-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <PackageSearch className="text-rose-500" size={18} />
+              Vendor-wise Pending Approval
+            </h3>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Stage: Approval Note</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {vendorList.map((vendor, i) => (
+              <motion.div
+                key={vendor.name}
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: i * 0.05 }}
+                className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3 group hover:border-emerald-200 transition-all"
+              >
+                <div className="flex justify-between items-start">
+                  <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-600 transition-colors">
+                    <ShoppingCart size={16} />
+                  </div>
+                  <div className="bg-amber-100 text-amber-700 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">
+                    {vendor.count} Items
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-900 truncate mb-0.5">{vendor.name}</p>
+                  <p className="text-xl font-black text-emerald-600">₹{vendor.amount.toLocaleString()}</p>
+                </div>
+                <div className="pt-2 border-t border-slate-50 mt-1">
+                   <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden">
+                      <div 
+                        className="bg-emerald-500 h-full rounded-full" 
+                        style={{ width: `${Math.min(100, (vendor.amount / Math.max(...vendorList.map(v => v.amount))) * 100)}%` }} 
+                      />
+                   </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
