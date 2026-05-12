@@ -17,12 +17,14 @@
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
     "firebase": "^12.12.1",
+    "fuse.js": "^7.3.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
-    "react-dom": "^19.0.1"
+    "react-dom": "^19.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",

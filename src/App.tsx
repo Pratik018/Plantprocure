@@ -44,6 +44,7 @@ import {
   Check,
   CheckSquare,
   FileDown,
+  FileSpreadsheet,
   Settings,
   Users,
   Trash2,
@@ -54,12 +55,18 @@ import {
   Trash,
   MessageCircle,
   Send,
-  UserCircle
+  UserCircle,
+  Calendar,
+  Tag,
+  Info,
+  PackageSearch,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, differenceInCalendarDays } from 'date-fns';
+import Fuse from 'fuse.js';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { utils, writeFile } from 'xlsx';
 
 import { auth, db, signIn, signOut, handleFirestoreError, OperationType, signInWithEmail, signUpWithEmail } from './lib/firebase';
 import { Procurement, ProcurementStatus } from './types';
@@ -88,6 +95,28 @@ const parseDate = (d: any): Date => {
 
 // Admin email from metadata/user info
 const BOOTSTRAP_ADMIN_EMAIL = "impratikpatra@gmail.com";
+
+const VENDORS = [
+  "Shruti",
+  "Rajiv electricals",
+  "Gulati Engineering",
+  "Mahindra Electricals",
+  "Sh. Laxmi Narayan Enterprises",
+  "Sh. Amit Auto",
+  "Boiler Engineering",
+  "Vinnie Engineering",
+  "GMP",
+  "Abhishek",
+  "Shri Sai",
+  "CG Hydraulics",
+  "Jai Krishna",
+  "Agrawal Engineering",
+  "Shri Krishna Enterprises",
+  "Akansha Enterprises",
+  "Vindhya Vasini",
+  "GeM",
+  "Others"
+];
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -494,6 +523,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
+      <datalist id="vendor-list">
+        {VENDORS.map(v => <option key={v} value={v} />)}
+      </datalist>
       {/* Mobile Header */}
       <header className="md:hidden flex items-center justify-between p-4 bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="flex items-center gap-2">
@@ -1374,13 +1406,26 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
 }) {
   const [updating, setUpdating] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bulkRemarks, setBulkRemarks] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [vendorFilter, setVendorFilter] = useState('');
+  const [requestorFilter, setRequestorFilter] = useState('');
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   
   // Date filters
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+
+  const vendorMatchIds = React.useMemo(() => {
+    if (!vendorFilter) return null;
+    const fuse = new Fuse(procurements, {
+      keys: ['vendorName'],
+      threshold: 0.4,
+      distance: 100,
+    });
+    return new Set(fuse.search(vendorFilter).map(r => r.item.id));
+  }, [procurements, vendorFilter]);
 
   const filterProcurements = (items: Procurement[]) => {
     return items.filter(p => {
@@ -1389,6 +1434,10 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
         (p.requestName || p.userName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (p.vendorName || '').toLowerCase().includes(searchQuery.toLowerCase());
       
+      const matchesVendor = !vendorFilter || (vendorMatchIds && vendorMatchIds.has(p.id));
+      
+      const matchesRequestor = !requestorFilter || (p.requestName || p.userName || '').toLowerCase().includes(requestorFilter.toLowerCase());
+
       let matchesDate = true;
       if (startDate) {
         const start = new Date(startDate);
@@ -1401,7 +1450,7 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
         matchesDate = matchesDate && new Date(p.requestDate) <= end;
       }
       
-      return matchesSearch && matchesDate;
+      return matchesSearch && matchesVendor && matchesRequestor && matchesDate;
     });
   };
 
@@ -1475,10 +1524,55 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
       });
 
       doc.save(`Procurement_Detailed_Report_${format(new Date(), 'yyyyMMdd_HHmm')}.pdf`);
-      showAlert('The detailed report has been generated and downloaded.', 'Export Successful');
+      showAlert('The detailed report has been generated and downloaded as PDF.', 'Export Successful');
     } catch (error) {
       console.error('PDF Export Error:', error);
       showAlert('Failed to generate PDF. Check console for details.', 'Export Error');
+    }
+  };
+
+  const exportToExcel = () => {
+    try {
+      const filteredProcurements = filterProcurements(procurements);
+      
+      if (filteredProcurements.length === 0) {
+        showAlert('No records found for the selected filters.', 'Filter Empty');
+        return;
+      }
+
+      const rows = filteredProcurements.map(p => ({
+        'Item Description': p.itemDescription,
+        'Requester': p.requestName || p.userName || 'N/A',
+        'Status': p.status,
+        'Priority': p.priority,
+        'Quantity': `${p.quantity} ${p.unit}`,
+        'Est. Cost': p.estCost,
+        'Actual Cost': p.actualCost || '-',
+        'Vendor Name': p.vendorName || '-',
+        'Request Date': format(parseDate(p.requestDate), 'yyyy-MM-dd HH:mm'),
+        'Purchase Date': p.purchaseDate ? format(parseDate(p.purchaseDate), 'yyyy-MM-dd') : '-',
+        'Approval Date': p.approvalNoteDate ? format(parseDate(p.approvalNoteDate), 'yyyy-MM-dd') : '-',
+        'Payment Date': p.paymentDate ? format(parseDate(p.paymentDate), 'yyyy-MM-dd') : '-',
+        'Purpose': p.purpose || '-',
+        'Admin Remarks': p.adminRemarks || '-',
+        'Purchase Remarks': p.purchaseRemarks || '-'
+      }));
+
+      const worksheet = utils.json_to_sheet(rows);
+      const workbook = utils.book_new();
+      utils.book_append_sheet(workbook, worksheet, "Procurements");
+
+      // Auto-size columns
+      const maxWidths = Object.keys(rows[0] || {}).map(key => {
+        return Math.max(key.length, ...rows.map(row => String((row as any)[key]).length));
+      });
+      worksheet['!cols'] = maxWidths.map(w => ({ wch: w + 2 }));
+
+      writeFile(workbook, `Procurement_Report_${format(new Date(), 'yyyyMMdd_HHmm')}.xlsx`);
+      showAlert('The detailed report has been generated and downloaded as Excel.', 'Export Successful');
+    } catch (error) {
+      console.error('Excel Export Error:', error);
+      showAlert('Failed to generate Excel. Check console for details.', 'Export Error');
     }
   };
 
@@ -1609,7 +1703,7 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
 
   return (
     <div className="space-y-10">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 ${selectedId ? 'hidden lg:flex' : 'flex'}`}>
         <div>
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Admin Dashboard</h2>
           <p className="text-slate-500">Overview of all procurement lifecycles</p>
@@ -1642,6 +1736,32 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
             />
           </div>
           <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">Vendor (AI Search)</span>
+            <div className="relative">
+              <Tag size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-500" />
+              <input 
+                type="text"
+                list="vendor-list"
+                placeholder="Search/Select vendor..."
+                value={vendorFilter}
+                onChange={(e) => setVendorFilter(e.target.value)}
+                className="pl-9 pr-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white shadow-sm w-40"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">Requester</span>
+            <input 
+              type="text"
+              placeholder="Requester..."
+              value={requestorFilter}
+              onChange={(e) => setRequestorFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white shadow-sm w-32"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
             <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">To Request Date</span>
             <input 
               type="date"
@@ -1656,15 +1776,25 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all border border-indigo-100 shadow-sm h-[38px]"
           >
             <FileDown size={16} />
-            Export PDF
+            PDF
           </button>
 
-          {(startDate || endDate || searchQuery) && (
+          <button 
+            onClick={exportToExcel}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all border border-emerald-100 shadow-sm h-[38px]"
+          >
+            <FileSpreadsheet size={16} />
+            Excel
+          </button>
+
+          {(startDate || endDate || searchQuery || vendorFilter || requestorFilter) && (
             <button 
               onClick={() => {
                 setStartDate('');
                 setEndDate('');
                 setSearchQuery('');
+                setVendorFilter('');
+                setRequestorFilter('');
               }}
               className="h-[38px] px-3 py-2 hover:bg-rose-50 text-rose-600 font-bold text-[10px] uppercase tracking-wider transition-colors rounded-xl flex items-center gap-1.5"
             >
@@ -1702,160 +1832,162 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
         </div>
       </div>
 
-      <div className="space-y-6 relative">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Clock className="text-amber-500" size={20} />
-            <h3 className="text-lg font-bold text-slate-800">Pending Requests</h3>
-            <span className="bg-amber-100 text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full">
-              {pendingRequests.length}
-            </span>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className={`lg:col-span-1 space-y-6 ${selectedId ? 'hidden lg:block' : 'block'}`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Clock className="text-amber-500" size={20} />
+              <h3 className="text-lg font-bold text-slate-800">Pending Requests</h3>
+              <span className="bg-amber-100 text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                {pendingRequests.length}
+              </span>
+            </div>
+            {pendingRequests.length > 0 && (
+               <button 
+                onClick={selectAll}
+                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5"
+               >
+                 <CheckSquare size={14} />
+                 {selectedIds.length === pendingRequests.length ? 'Deselect All' : 'Select All'}
+               </button>
+            )}
           </div>
-          {pendingRequests.length > 0 && (
-             <button 
-              onClick={selectAll}
-              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5"
-             >
-               <CheckSquare size={14} />
-               {selectedIds.length === pendingRequests.length ? 'Deselect All' : 'Select All'}
-             </button>
-          )}
-        </div>
 
-        {/* Bulk Action Bar */}
-        <AnimatePresence>
-          {selectedIds.length > 0 && (
-            <motion.div 
-              initial={{ opacity: 0, y: 50, scale: 0.9 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 50, scale: 0.9 }}
-              className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-4 rounded-2xl shadow-2xl border border-slate-700 flex flex-col md:flex-row items-center gap-4 min-w-[320px] md:min-w-[600px]"
-            >
-              <div className="flex items-center gap-3 pr-4 md:border-r border-slate-700">
-                 <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-xs font-bold">
-                    {selectedIds.length}
-                 </div>
-                 <div>
-                    <p className="text-xs font-bold">Items Selected</p>
-                    <p className="text-[10px] text-slate-400">Bulk action mode active</p>
-                 </div>
-              </div>
-              
-              <div className="flex-1 w-full md:w-auto">
-                 <input 
-                  type="text" 
-                  placeholder="Bulk remarks (optional)..."
-                  className="w-full bg-slate-800 border-none rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-emerald-500 outline-none"
-                  value={bulkRemarks}
-                  onChange={e => setBulkRemarks(e.target.value)}
-                 />
-              </div>
-
-              <div className="flex items-center gap-2">
-                 <button 
-                  onClick={() => handleBulkAction('APPROVED')}
-                  disabled={updating === 'BULK'}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors"
-                 >
-                   Approve
-                 </button>
-                 <button 
-                  onClick={() => handleBulkAction('PENDING')}
-                  disabled={updating === 'BULK'}
-                  className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors"
-                 >
-                   Pending
-                 </button>
-                 <button 
-                  onClick={() => handleBulkAction('REJECTED')}
-                  disabled={updating === 'BULK'}
-                  className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors"
-                 >
-                   Reject
-                 </button>
-                 <button 
-                  onClick={() => setSelectedIds([])}
-                  className="text-slate-400 hover:text-white p-2"
-                 >
-                   <X size={16} />
-                 </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {pendingRequests.length === 0 ? (
-          <div className="bg-white rounded-3xl p-10 text-center border border-slate-200 border-dashed">
-            <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-3 opacity-50" />
-            <p className="text-slate-400">No new requests awaiting review</p>
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            {pendingRequests.map(p => (
-              <AdminCard 
-                key={p.id} 
-                item={p} 
-                onAction={handleAction} 
-                loading={updating === p.id}
-                isSelected={selectedIds.includes(p.id)}
-                onSelect={() => toggleSelect(p.id)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="pt-10 border-t border-slate-200">
-        <div className="flex items-center gap-3 mb-6">
-          <ShieldCheck className="text-emerald-500" size={20} />
-          <h3 className="text-lg font-bold text-slate-800">Review History</h3>
-          <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">
-            {reviewHistory.length}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {reviewHistory.length === 0 ? (
-            <div className="md:col-span-full bg-slate-50 rounded-2xl p-8 text-center border border-slate-100">
-              <p className="text-slate-400 text-sm italic">No history available</p>
+          {pendingRequests.length === 0 ? (
+            <div className="bg-white rounded-3xl p-10 text-center border border-slate-200 border-dashed">
+              <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-3 opacity-50" />
+              <p className="text-slate-400">No new requests awaiting review</p>
             </div>
           ) : (
-            reviewHistory.map(p => (
-              <div key={p.id} className="bg-white border border-slate-100 p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-                <div className="flex justify-between items-start mb-2">
-                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
-                    p.status === 'REJECTED' ? 'bg-rose-100 text-rose-600' : 
-                    p.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-600' :
-                    'bg-indigo-100 text-indigo-600'
-                  }`}>
-                    {p.status}
-                  </span>
-                  <span className="text-[10px] text-slate-400">{format(parseDate(p.requestDate), 'MMM d')}</span>
-                </div>
-                <p className="font-bold text-sm text-slate-900 truncate mb-1">{p.itemDescription}</p>
-                <div className="flex flex-col gap-0.5 text-[10px] mb-2">
-                  <div className="flex items-center gap-1.5 text-slate-500">
-                    <UserIcon size={10} />
-                    <span>Requester: <span className="font-semibold text-slate-700">{p.requestName || p.userName}</span></span>
+            <div className="space-y-3">
+              {pendingRequests.map(p => {
+                const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
+                return (
+                  <div key={p.id} className="flex items-center gap-2 group">
+                    <button 
+                      onClick={() => toggleSelect(p.id)}
+                      className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${selectedIds.includes(p.id) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
+                    >
+                      {selectedIds.includes(p.id) && <Check size={14} strokeWidth={3} />}
+                    </button>
+                    <button
+                      onClick={() => setSelectedId(p.id)}
+                      className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-white border-slate-100 hover:border-indigo-500 text-slate-900 shadow-sm'}`}
+                    >
+                      <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
+                      <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                        <Clock size={10} />
+                        {delay}d
+                      </div>
+                    </button>
                   </div>
-                  {p.purchaserName && (
-                    <div className="flex items-center gap-1.5 text-indigo-500">
-                      <ShoppingCart size={10} />
-                      <span>Purchaser: <span className="font-semibold text-indigo-700">{p.purchaserName}</span></span>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="pt-10 border-t border-slate-200">
+            <div className="flex items-center gap-3 mb-6">
+              <ShieldCheck className="text-emerald-500" size={20} />
+              <h3 className="text-lg font-bold text-slate-800">Review History</h3>
+              <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">
+                {reviewHistory.length}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              {reviewHistory.length === 0 ? (
+                <div className="bg-slate-50 rounded-2xl p-8 text-center border border-slate-100">
+                  <p className="text-slate-400 text-sm italic">No history available</p>
+                </div>
+              ) : (
+                reviewHistory.slice(0, 10).map(p => (
+                  <div key={p.id} className="bg-white border border-slate-50 p-3 rounded-xl shadow-sm flex items-center justify-between gap-3">
+                    <div className="truncate flex-1">
+                      <p className="font-bold text-xs text-slate-900 truncate">{p.itemDescription}</p>
+                      <p className="text-[10px] text-slate-500">Req: {p.requestName || p.userName}</p>
                     </div>
-                  )}
+                    <StatusBadge status={p.status} />
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className={`lg:col-span-2 ${selectedId ? 'block' : 'hidden lg:block'}`}>
+          <AnimatePresence>
+            {selectedIds.length > 0 && (
+              <motion.div 
+                initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 50, scale: 0.9 }}
+                className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-4 rounded-2xl shadow-2xl border border-slate-700 flex flex-col md:flex-row items-center gap-4 min-w-[320px] md:min-w-[600px]"
+              >
+                <div className="flex items-center gap-3 pr-4 md:border-r border-slate-700">
+                   <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-xs font-bold">
+                      {selectedIds.length}
+                   </div>
+                   <div>
+                      <p className="text-xs font-bold">Items Selected</p>
+                      <p className="text-[10px] text-slate-400">Bulk action mode active</p>
+                   </div>
                 </div>
-                <div className="flex justify-between items-center text-[11px] pt-1 border-t border-slate-50">
-                  <span className="font-bold text-slate-700">₹{p.actualCost || p.estCost}</span>
-                  <span className="text-[10px] text-slate-400">Qty: {p.quantity}</span>
+                
+                <div className="flex-1 w-full md:w-auto">
+                   <input 
+                    type="text" 
+                    placeholder="Bulk remarks (optional)..."
+                    className="w-full bg-slate-800 border-none rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-emerald-500 outline-none"
+                    value={bulkRemarks}
+                    onChange={e => setBulkRemarks(e.target.value)}
+                   />
                 </div>
-                {p.adminRemarks && (
-                   <p className="mt-2 pt-2 border-t border-slate-50 text-[10px] text-slate-400 italic italic truncate">
-                      Rem: {p.adminRemarks}
-                   </p>
-                )}
-              </div>
-            ))
+
+                <div className="flex items-center gap-2">
+                   <button 
+                    onClick={() => handleBulkAction('APPROVED')}
+                    disabled={updating === 'BULK'}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors"
+                   >
+                     Approve
+                   </button>
+                   <button 
+                    onClick={() => handleBulkAction('REJECTED')}
+                    disabled={updating === 'BULK'}
+                    className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors"
+                   >
+                     Reject
+                   </button>
+                   <button 
+                    onClick={() => setSelectedIds([])}
+                    className="text-slate-400 hover:text-white p-2"
+                   >
+                     <X size={16} />
+                   </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {selectedId ? (
+            <AdminCard 
+              key={selectedId} 
+              item={procurements.find(p => p.id === selectedId)!} 
+              onAction={async (id, status, remarks) => {
+                await handleAction(id, status, remarks);
+                setSelectedId(null);
+              }} 
+              loading={updating === selectedId}
+              isSelected={selectedIds.includes(selectedId)}
+              onSelect={() => toggleSelect(selectedId)}
+              onClose={() => setSelectedId(null)}
+            />
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center p-12 bg-white rounded-3xl border border-slate-200 border-dashed text-slate-400 min-h-[400px]">
+              <ShieldCheck size={48} className="mb-4 opacity-20" />
+              <p>Select a request from the list to view details and take action</p>
+            </div>
           )}
         </div>
       </div>
@@ -1866,9 +1998,22 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
 function TrackingDashboard({ procurements }: { procurements: Procurement[] }) {
   const [filter, setFilter] = useState<ProcurementStatus | 'ALL'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [vendorFilter, setVendorFilter] = useState('');
+  const [requestorFilter, setRequestorFilter] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   
+  const vendorMatchIds = React.useMemo(() => {
+    if (!vendorFilter) return null;
+    const fuse = new Fuse(procurements, {
+      keys: ['vendorName'],
+      threshold: 0.4,
+      distance: 100,
+    });
+    return new Set(fuse.search(vendorFilter).map(r => r.item.id));
+  }, [procurements, vendorFilter]);
+
   const filtered = procurements.filter(p => {
     const matchesStatus = filter === 'ALL' || p.status === filter;
     const matchesSearch = 
@@ -1876,6 +2021,10 @@ function TrackingDashboard({ procurements }: { procurements: Procurement[] }) {
       (p.requestName || p.userName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (p.vendorName || '').toLowerCase().includes(searchQuery.toLowerCase());
     
+    const matchesVendor = !vendorFilter || (vendorMatchIds && vendorMatchIds.has(p.id));
+
+    const matchesRequestor = !requestorFilter || (p.requestName || p.userName || '').toLowerCase().includes(requestorFilter.toLowerCase());
+
     let matchesDate = true;
     if (startDate) {
       const start = new Date(startDate);
@@ -1888,123 +2037,184 @@ function TrackingDashboard({ procurements }: { procurements: Procurement[] }) {
       matchesDate = matchesDate && new Date(p.requestDate) <= end;
     }
     
-    return matchesStatus && matchesSearch && matchesDate;
+    return matchesStatus && matchesSearch && matchesVendor && matchesRequestor && matchesDate;
   });
+
+  const getStepName = (status: ProcurementStatus) => {
+    const names: Record<ProcurementStatus, string> = {
+      'REQUESTED': 'Pending Approval',
+      'PENDING': 'Needs More Info',
+      'APPROVED': 'Ready to Purchase',
+      'REJECTED': 'Declined',
+      'PURCHASED': 'Awaiting Note',
+      'NOTE_APPROVED': 'Ready for Payment',
+      'PAYMENT_DONE': 'Completed'
+    };
+    return names[status];
+  };
+
+  const getOwnerName = (status: ProcurementStatus) => {
+    if (['REQUESTED', 'PENDING'].includes(status)) return 'Admin';
+    if (status === 'APPROVED') return 'Purchaser';
+    if (status === 'PURCHASED') return 'Admin (Note)';
+    if (status === 'NOTE_APPROVED') return 'Accounts';
+    return 'Done';
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 ${selectedId ? 'hidden lg:flex' : 'flex'}`}>
         <div>
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Track Status</h2>
           <p className="text-slate-500">Monitor the lifecycle of your requests</p>
         </div>
-        <div className="flex flex-col md:flex-row items-center gap-4">
-          <div className="relative w-full md:w-64">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative w-full md:w-48">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input 
               type="text"
-              placeholder="Search items, requesters..."
+              placeholder="Search..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white shadow-sm"
             />
           </div>
+          <div className="relative w-full md:w-48">
+            <Tag size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500" />
+            <input 
+              type="text"
+              list="vendor-list"
+              placeholder="Vendor (AI/Select)..."
+              value={vendorFilter}
+              onChange={(e) => setVendorFilter(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white shadow-sm"
+            />
+          </div>
           <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0 scrollbar-hide">
-            <Filter size={16} className="text-slate-400 shrink-0" />
-            <FilterButton active={filter === 'ALL'} label="All" onClick={() => setFilter('ALL')} />
-            <FilterButton active={filter === 'REQUESTED'} label="Pending Admin" onClick={() => setFilter('REQUESTED')} />
-            <FilterButton active={filter === 'APPROVED'} label="Approved" onClick={() => setFilter('APPROVED')} />
-            <FilterButton active={filter === 'PURCHASED'} label="Purchased" onClick={() => setFilter('PURCHASED')} />
-            <FilterButton active={filter === 'PAYMENT_DONE'} label="Completed" onClick={() => setFilter('PAYMENT_DONE')} />
+             <FilterButton active={filter === 'ALL'} label="All" onClick={() => setFilter('ALL')} />
+             <FilterButton active={filter === 'REQUESTED'} label="Pending" onClick={() => setFilter('REQUESTED')} />
+             <FilterButton active={filter === 'APPROVED'} label="Approved" onClick={() => setFilter('APPROVED')} />
+             <FilterButton active={filter === 'PAYMENT_DONE'} label="Done" onClick={() => setFilter('PAYMENT_DONE')} />
           </div>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-4 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">From Date</span>
-          <input 
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="px-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-emerald-50/30"
-          />
-        </div>
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">To Date</span>
-          <input 
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="px-3 py-2 rounded-xl text-xs font-medium border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-emerald-50/30"
-          />
-        </div>
-        {(startDate || endDate || searchQuery || filter !== 'ALL') && (
-          <button 
-            onClick={() => {
-              setStartDate('');
-              setEndDate('');
-              setSearchQuery('');
-              setFilter('ALL');
-            }}
-            className="mt-auto px-4 py-2 hover:bg-rose-50 text-rose-600 font-bold text-[10px] uppercase tracking-wider transition-colors rounded-xl flex items-center gap-1.5"
-          >
-            <X size={12} />
-            Reset Filters
-          </button>
-        )}
-      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className={`lg:col-span-1 space-y-4 ${selectedId ? 'hidden lg:block' : 'block'}`}>
+           <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+             <div className="flex gap-2">
+               <input 
+                 type="date" 
+                 value={startDate} 
+                 onChange={e => setStartDate(e.target.value)} 
+                 className="flex-1 bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5 text-[10px] outline-none" 
+               />
+               <input 
+                 type="date" 
+                 value={endDate} 
+                 onChange={e => setEndDate(e.target.value)} 
+                 className="flex-1 bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5 text-[10px] outline-none" 
+               />
+             </div>
+             {(startDate || endDate || vendorFilter || searchQuery || filter !== 'ALL') && (
+               <button 
+                 onClick={() => { setStartDate(''); setEndDate(''); setVendorFilter(''); setSearchQuery(''); setFilter('ALL'); }}
+                 className="w-full text-[10px] font-bold text-rose-500 uppercase py-1"
+               >
+                 Clear Filters
+               </button>
+             )}
+           </div>
 
-      <div className="grid gap-4">
-        {filtered.length === 0 ? (
-          <div className="bg-white rounded-3xl p-12 text-center border border-slate-200">
-            <p className="text-slate-400 italic">No items found matching this status.</p>
-          </div>
-        ) : (
-          filtered.map(p => (
-            <div key={p.id} className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <StatusBadge status={p.status} />
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{format(parseDate(p.requestDate), 'MMM d, yyyy')}</span>
-                </div>
-                <h4 className="font-bold text-slate-900">{p.itemDescription}</h4>
-                <div className="flex items-center gap-3 mt-1.5">
-                  <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                    <UserIcon size={10} />
-                    <span>{p.requestName || p.userName}</span>
+          {filtered.length === 0 ? (
+            <div className="bg-slate-100 rounded-2xl p-8 text-center text-slate-400 text-sm italic">
+              No matching requests
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filtered.map(p => {
+                const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => setSelectedId(p.id)}
+                    className={`w-full p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-white border-slate-100 hover:border-emerald-500 text-slate-900 shadow-sm'}`}
+                  >
+                    <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
+                    <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                      <Clock size={10} />
+                      {delay}d
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className={`lg:col-span-2 ${selectedId ? 'block' : 'hidden lg:block'}`}>
+          {selectedId ? (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200 flex flex-col gap-8 h-fit"
+            >
+              <div className="flex justify-between items-start">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <StatusBadge status={filtered.find(p => p.id === selectedId)!.status} />
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">#{selectedId.slice(0, 8)}</span>
                   </div>
-                  {p.purchaserName && (
-                    <div className="flex items-center gap-1 text-[10px] text-indigo-500">
-                      <ShoppingCart size={10} />
-                      <span>{p.purchaserName}</span>
-                    </div>
-                  )}
+                  <h3 className="text-2xl font-black text-slate-900 tracking-tight">{filtered.find(p => p.id === selectedId)!.itemDescription}</h3>
                 </div>
-                <div className="flex items-center gap-4 mt-2">
-                   <div className="flex items-center gap-1 text-xs text-slate-500">
-                      <Clock size={12} />
-                      Step: {getStepName(p.status)}
-                   </div>
-                   <p className="text-xs font-bold text-slate-700">₹{p.actualCost || p.estCost}</p>
+                <button 
+                  onClick={() => setSelectedId(null)}
+                  className="p-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-500 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <DetailBox label="Requester" value={filtered.find(p => p.id === selectedId)!.requestName || filtered.find(p => p.id === selectedId)!.userName} />
+                <DetailBox label="Next Action" value={getOwnerName(filtered.find(p => p.id === selectedId)!.status)} />
+                <DetailBox label="Est. Cost" value={`₹${filtered.find(p => p.id === selectedId)!.estCost}`} />
+                <DetailBox label="Priority" value={filtered.find(p => p.id === selectedId)!.priority} />
+                <DetailBox label="Current Step" value={getStepName(filtered.find(p => p.id === selectedId)!.status)} />
+                <DetailBox label="Date" value={format(parseDate(filtered.find(p => p.id === selectedId)!.requestDate), 'MMM d, yyyy')} />
+                {filtered.find(p => p.id === selectedId)!.vendorName && <DetailBox label="Vendor" value={filtered.find(p => p.id === selectedId)!.vendorName} />}
+                {filtered.find(p => p.id === selectedId)!.actualCost && <DetailBox label="Actual" value={`₹${filtered.find(p => p.id === selectedId)!.actualCost}`} />}
+              </div>
+
+              <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-4">
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Purpose</p>
+                  <p className="text-slate-700 font-medium">{filtered.find(p => p.id === selectedId)!.purpose}</p>
                 </div>
-                {p.adminRemarks && (
-                  <div className="mt-3 bg-amber-50/50 p-3 rounded-xl border border-amber-100 flex items-start gap-2.5">
-                    <ShieldCheck size={14} className="text-amber-600 mt-0.5 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[10px] text-amber-500 font-bold uppercase tracking-wider mb-0.5">Admin Remark</p>
-                      <p className="text-[11px] text-amber-900 leading-relaxed italic">"{p.adminRemarks}"</p>
-                    </div>
+                {filtered.find(p => p.id === selectedId)!.adminRemarks && (
+                  <div>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Admin Remarks</p>
+                    <p className="text-slate-700 font-medium italic">"{filtered.find(p => p.id === selectedId)!.adminRemarks}"</p>
                   </div>
                 )}
               </div>
-              <div className="flex flex-col md:items-end gap-1">
-                 <p className="text-[10px] text-slate-400 font-bold uppercase">Current Owner</p>
-                 <p className="text-xs font-medium text-slate-700">{getOwnerName(p.status)}</p>
+              
+              <div className="md:hidden">
+                <button 
+                  onClick={() => setSelectedId(null)}
+                  className="w-full py-4 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200"
+                >
+                  Go Back
+                </button>
               </div>
+            </motion.div>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center p-12 bg-white rounded-3xl border border-slate-200 border-dashed text-slate-400 min-h-[400px]">
+              <PackageSearch size={48} className="mb-4 opacity-20" />
+              <p>Select a request to track its details</p>
             </div>
-          ))
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -2067,7 +2277,9 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
 }) {
   const approvedItems = procurements.filter(p => p.status === 'APPROVED');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [isOtherVendor, setIsOtherVendor] = useState(false);
   const [formData, setFormData] = useState({
     purchaseDate: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
     vendorName: '',
@@ -2076,49 +2288,120 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
     purchaseRemarks: ''
   });
 
+  const [itemCosts, setItemCosts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    if (selectedId) {
+      const item = approvedItems.find(p => p.id === selectedId);
+      setFormData({
+        purchaseDate: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
+        vendorName: '',
+        actualCost: item?.estCost || 0,
+        invoiceNumber: '',
+        purchaseRemarks: ''
+      });
+      setIsOtherVendor(false);
+    }
+  }, [selectedId, approvedItems]);
+
+  useEffect(() => {
+    if (selectedIds.length > 0) {
+      const costs: Record<string, number> = {};
+      selectedIds.forEach(id => {
+        const item = approvedItems.find(p => p.id === id);
+        costs[id] = item?.estCost || 0;
+      });
+      setItemCosts(costs);
+      
+      setFormData(prev => ({
+        ...prev,
+        purchaseDate: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
+        vendorName: prev.vendorName || '',
+        invoiceNumber: prev.invoiceNumber || '',
+      }));
+    }
+  }, [selectedIds, approvedItems]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const selectAll = (items: Procurement[]) => {
+    if (selectedIds.length === items.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(items.map(p => p.id));
+    }
+  };
+
+  const handleVendorChange = (val: string) => {
+    if (val === 'Others') {
+      setIsOtherVendor(true);
+      setFormData({ ...formData, vendorName: '' });
+    } else {
+      setIsOtherVendor(false);
+      setFormData({ ...formData, vendorName: val });
+    }
+  };
+
+  // Filters
+  const [dateFilter, setDateFilter] = useState('');
+  const [requestorFilter, setRequestorFilter] = useState('');
+
+  const filteredItems = approvedItems.filter(p => {
+    const matchesDate = !dateFilter || format(parseDate(p.requestDate), 'yyyy-MM-dd') === dateFilter;
+    const matchesRequestor = !requestorFilter || (p.requestName || p.userName || '').toLowerCase().includes(requestorFilter.toLowerCase());
+    return matchesDate && matchesRequestor;
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedId) {
-      showAlert('Please select an item from the list first.', 'No Selection');
+    const idsToUpdate = selectedIds.length > 0 ? selectedIds : (selectedId ? [selectedId] : []);
+    if (idsToUpdate.length === 0) {
+      showAlert('Please select items from the list first.', 'No Selection');
       return;
     }
     
-    showConfirm('Are you sure you want to submit these purchase details? This action cannot be undone.', async () => {
+    showConfirm(`Are you sure you want to submit purchase details for ${idsToUpdate.length} item(s)? This action cannot be undone.`, async () => {
       setSubmitting(true);
-      const docRef = doc(db, 'procurements', selectedId);
-      
-      const updateData = {
-        purchaseDate: formData.purchaseDate,
-        vendorName: formData.vendorName,
-        actualCost: Number(formData.actualCost),
-        invoiceNumber: formData.invoiceNumber,
-        purchaseRemarks: formData.purchaseRemarks,
-        purchaserName: user?.displayName || 'Unknown',
-        purchaserId: user?.uid,
-        status: 'PURCHASED' as ProcurementStatus,
-        updatedAt: serverTimestamp()
-      };
-
       try {
-        await updateDoc(docRef, updateData);
-        showAlert('The purchase details have been recorded successfully.', 'Success');
+        const batch = writeBatch(db);
         
-        // Notify admins
-        if (user) {
-          const item = approvedItems.find(p => p.id === selectedId);
-          for (const adminUid of adminUids) {
-            if (adminUid === user.uid) continue;
-            await sendNotification(
-              adminUid,
-              'Purchase Recorded',
-              `Purchase for ${item?.itemDescription} has been logged by ${user.displayName}.`,
-              'INFO',
-              selectedId
-            );
+        for (const id of idsToUpdate) {
+          const item = approvedItems.find(p => p.id === id);
+          const cost = selectedIds.length > 1 ? (itemCosts[id] || 0) : Number(formData.actualCost);
+          
+          batch.update(doc(db, 'procurements', id), {
+            purchaseDate: formData.purchaseDate,
+            vendorName: formData.vendorName,
+            actualCost: cost,
+            invoiceNumber: formData.invoiceNumber,
+            purchaseRemarks: formData.purchaseRemarks,
+            purchaserName: user?.displayName || 'Unknown',
+            purchaserId: user?.uid,
+            status: 'PURCHASED' as ProcurementStatus,
+            updatedAt: serverTimestamp()
+          });
+
+          if (user && item) {
+            for (const adminUid of adminUids) {
+              if (adminUid === user.uid) continue;
+              await sendNotification(
+                adminUid,
+                'Purchase Recorded',
+                `Purchase for ${item.itemDescription} has been logged by ${user.displayName}.`,
+                'INFO',
+                id
+              );
+            }
           }
         }
 
+        await batch.commit();
+        showAlert('The purchase details have been recorded successfully.', 'Success');
+        
         setSelectedId(null);
+        setSelectedIds([]);
         setFormData({
           purchaseDate: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
           vendorName: '',
@@ -2137,56 +2420,174 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className={`${selectedId ? 'hidden lg:block' : 'block'}`}>
         <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Purchase Entry</h2>
         <p className="text-slate-500">Log details of approved items after physical purchase</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-1 space-y-3">
-          <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-2">Approved Items</h3>
-          {approvedItems.length === 0 ? (
-            <div className="bg-slate-100 rounded-xl p-6 text-center text-slate-400">
-              No approved items to purchase
+        <div className={`lg:col-span-1 space-y-4 ${selectedId ? 'hidden lg:block' : 'block'}`}>
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Filters</h3>
+            <div className="space-y-2">
+              <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-2">
+                <Calendar size={14} className="text-slate-400" />
+                <input 
+                  type="date" 
+                  value={dateFilter} 
+                  onChange={e => setDateFilter(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-700 focus:ring-0 w-full p-0"
+                />
+              </div>
+              <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-2">
+                <UserIcon size={14} className="text-slate-400" />
+                <input 
+                  type="text" 
+                  placeholder="Requester..."
+                  value={requestorFilter} 
+                  onChange={e => setRequestorFilter(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-700 focus:ring-0 w-full p-0 placeholder:text-slate-400"
+                />
+              </div>
+              {(dateFilter || requestorFilter) && (
+                <button 
+                  onClick={() => { setDateFilter(''); setRequestorFilter(''); }}
+                  className="w-full text-[10px] font-bold text-rose-500 uppercase hover:text-rose-600 pt-1"
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between px-1 mb-2">
+            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Approved Items</h3>
+            {filteredItems.length > 0 && (
+              <button 
+                onClick={() => selectAll(filteredItems)}
+                className="text-[10px] font-bold text-emerald-600 hover:underline"
+              >
+                {selectedIds.length === filteredItems.length ? 'Deselect All' : 'Select All'}
+              </button>
+            )}
+          </div>
+          {filteredItems.length === 0 ? (
+            <div className="bg-slate-100 rounded-xl p-6 text-center text-slate-400 text-sm italic">
+              No matching items found
             </div>
           ) : (
-            approvedItems.map(p => (
-              <button
-                key={p.id}
-                onClick={() => setSelectedId(p.id)}
-                className={`w-full p-4 rounded-2xl text-left border transition-all ${selectedId === p.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-200' : 'bg-white border-slate-200 hover:border-emerald-500 text-slate-900'}`}
-              >
-                <p className="font-bold truncate">{p.itemDescription}</p>
-                <p className={`text-[10px] mt-1 ${selectedId === p.id ? 'text-emerald-100' : 'text-slate-500'}`}>Req: {p.requestName || p.userName}</p>
-                <div className="flex justify-between mt-2 text-xs opacity-80">
-                  <span>Qty: {p.quantity} {p.unit}</span>
-                  <span>Est: ₹{p.estCost}</span>
+            filteredItems.map(p => {
+              const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
+              const isSelected = selectedIds.includes(p.id);
+              return (
+                <div key={p.id} className="flex items-center gap-2 group">
+                  <button 
+                    onClick={() => toggleSelect(p.id)}
+                    className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${isSelected ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
+                  >
+                    {isSelected && <Check size={14} strokeWidth={3} />}
+                  </button>
+                  <button
+                    onClick={() => setSelectedId(p.id)}
+                    className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-white border-slate-100 hover:border-emerald-500 text-slate-900 shadow-sm'}`}
+                  >
+                    <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
+                    <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                      <Clock size={10} />
+                      {delay}d
+                    </div>
+                  </button>
                 </div>
-              </button>
-            ))
+              );
+            })
           )}
         </div>
 
-        <div className="lg:col-span-2">
-          {selectedId ? (
+        <div className={`lg:col-span-2 ${(selectedId || selectedIds.length > 0) ? 'block' : 'hidden lg:block'}`}>
+          {(selectedId || selectedIds.length > 0) ? (
             <motion.div 
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden"
             >
               <div className="p-8 border-b border-slate-100 bg-slate-50">
-                <h3 className="font-bold text-lg text-slate-900">Purchase Details for:</h3>
-                <p className="text-emerald-600 font-medium mb-4">{approvedItems.find(p => p.id === selectedId)?.itemDescription}</p>
-                <div className="flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200 w-fit">
-                  <UserIcon size={14} className="text-slate-400" />
-                  <span className="text-xs font-bold text-slate-600">Requester: {approvedItems.find(p => p.id === selectedId)?.requestName || approvedItems.find(p => p.id === selectedId)?.userName}</span>
-                </div>
+                <span className="text-xs font-bold bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded uppercase tracking-wider mb-2 inline-block">
+                  {selectedIds.length > 1 ? 'Bulk Entry' : 'Purchase Details'}
+                </span>
+                <h3 className="font-bold text-lg text-slate-900">
+                  {selectedIds.length > 1 
+                    ? `Submit Purchase Details for ${selectedIds.length} Items:`
+                    : `Purchase Details for:`}
+                </h3>
+                
+                {selectedIds.length <= 1 ? (
+                  <>
+                    <p className="text-emerald-600 font-medium mb-2">
+                       {approvedItems.find(p => p.id === (selectedIds[0] || selectedId))?.itemDescription}
+                    </p>
+                    <div className="flex items-center gap-2 bg-white p-2 px-3 rounded-xl border border-slate-200 w-fit">
+                      <UserIcon size={12} className="text-slate-400" />
+                      <span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">Requester: {approvedItems.find(p => p.id === (selectedIds[0] || selectedId))?.requestName || approvedItems.find(p => p.id === (selectedIds[0] || selectedId))?.userName}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-4 p-4 bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 max-h-48 overflow-y-auto">
+                    {selectedIds.map(id => {
+                      const item = approvedItems.find(p => p.id === id);
+                      return (
+                        <div key={id} className="py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                          <div className="flex-1">
+                            <p className="font-bold text-xs text-slate-700 truncate">{item?.itemDescription}</p>
+                            <p className="text-[10px] text-slate-400">Est: ₹{item?.estCost} | Qty: {item?.quantity} {item?.unit}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Actual:</span>
+                            <div className="relative">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">₹</span>
+                              <input 
+                                type="number"
+                                className="w-24 bg-slate-50 border border-slate-200 rounded-lg pl-5 pr-2 py-1 text-xs font-bold focus:ring-1 focus:ring-emerald-500 outline-none"
+                                value={itemCosts[id] || 0}
+                                onChange={e => setItemCosts(prev => ({ ...prev, [id]: parseFloat(e.target.value) || 0 }))}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
               <form onSubmit={handleSubmit} className="p-8 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <FormField label="Purchase Date" type="datetime-local" value={formData.purchaseDate} onChange={v => setFormData({...formData, purchaseDate: v})} required />
-                  <FormField label="Vendor Name" value={formData.vendorName} onChange={v => setFormData({...formData, vendorName: v})} required />
-                  <FormField label="Actual Cost" type="number" value={formData.actualCost} onChange={v => setFormData({...formData, actualCost: parseFloat(v) || 0})} required />
+                  <FormField label="Purchase Date" type="datetime-local" value={formData.purchaseDate} onChange={(v: any) => setFormData({...formData, purchaseDate: v})} required />
+                  <div className="flex flex-col gap-2">
+                    <label className="text-sm font-semibold text-slate-700">Vendor Name <span className="text-rose-500">*</span></label>
+                    <div className="flex flex-col gap-2">
+                      <select 
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 focus:bg-white outline-none transition-all text-slate-900"
+                        value={isOtherVendor ? 'Others' : (VENDORS.includes(formData.vendorName) ? formData.vendorName : (formData.vendorName ? 'Others' : ''))}
+                        onChange={(e) => handleVendorChange(e.target.value)}
+                        required={!isOtherVendor}
+                      >
+                        <option value="" disabled>Select Vendor</option>
+                        {VENDORS.map(v => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                      {isOtherVendor && (
+                        <input 
+                          type="text"
+                          placeholder="Enter Vendor Name"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 focus:bg-white outline-none transition-all text-slate-900"
+                          value={formData.vendorName}
+                          onChange={(e) => setFormData({...formData, vendorName: e.target.value})}
+                          required
+                        />
+                      )}
+                    </div>
+                  </div>
+                  {selectedIds.length <= 1 && (
+                    <FormField label="Actual Cost" type="number" value={formData.actualCost} onChange={(v: any) => setFormData({...formData, actualCost: parseFloat(v) || 0})} required />
+                  )}
                   <FormField label="Invoice Number" value={formData.invoiceNumber} onChange={v => setFormData({...formData, invoiceNumber: v})} required />
                   <div className="md:col-span-2">
                     <FormField label="Purchase Remarks" type="textarea" value={formData.purchaseRemarks} onChange={v => setFormData({...formData, purchaseRemarks: v})} required />
@@ -2195,17 +2596,18 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
                 <div className="flex justify-between items-center pt-4">
                   <button 
                     type="button"
-                    onClick={() => setSelectedId(null)}
+                    onClick={() => { setSelectedId(null); setSelectedIds([]); }}
                     className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-all"
                   >
-                    Go Back
+                    Cancel
                   </button>
                   <button 
                     type="submit" 
-                    disabled={submitting}
-                    className="bg-slate-900 text-white px-10 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all disabled:opacity-50"
+                    disabled={submitting || (selectedIds.length === 0 && !selectedId)}
+                    className="bg-slate-900 text-white px-10 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {submitting ? 'Submitting...' : 'Submit Purchase Data'}
+                    {selectedIds.length > 1 && <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] ml-2">{selectedIds.length} Items</span>}
                   </button>
                 </div>
               </form>
@@ -2225,51 +2627,95 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
 function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { procurements: Procurement[], sendNotification: any, adminUids: string[], user: User | null }) {
   const purchasedItems = procurements.filter(p => p.status === 'PURCHASED');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     approvalNoteNo: '',
     approvalNoteDate: format(new Date(), "yyyy-MM-dd")
   });
 
+  // Filters
+  const [dateFilter, setDateFilter] = useState('');
+  const [vendorFilter, setVendorFilter] = useState('');
+  const [requestorFilter, setRequestorFilter] = useState('');
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const selectAll = (items: Procurement[]) => {
+    if (selectedIds.length === items.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(items.map(p => p.id));
+    }
+  };
+
+  const vendorMatchIds = React.useMemo(() => {
+    if (!vendorFilter) return null;
+    const fuse = new Fuse(procurements, {
+      keys: ['vendorName'],
+      threshold: 0.4,
+      distance: 100,
+    });
+    return new Set(fuse.search(vendorFilter).map(r => r.item.id));
+  }, [procurements, vendorFilter]);
+
+  const filteredItems = purchasedItems.filter(p => {
+    const matchesDate = !dateFilter || format(parseDate(p.purchaseDate), 'yyyy-MM-dd') === dateFilter;
+    const matchesVendor = !vendorFilter || (vendorMatchIds && vendorMatchIds.has(p.id));
+    const matchesRequestor = !requestorFilter || (p.requestName || p.userName || '').toLowerCase().includes(requestorFilter.toLowerCase());
+    return matchesDate && matchesVendor && matchesRequestor;
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedId) return;
+    const idsToUpdate = selectedIds.length > 0 ? selectedIds : (selectedId ? [selectedId] : []);
+    if (idsToUpdate.length === 0) return;
+    
     setSubmitting(true);
     try {
-      const p = purchasedItems.find(item => item.id === selectedId);
-      await updateDoc(doc(db, 'procurements', selectedId), {
-        ...formData,
-        status: 'NOTE_APPROVED',
-        updatedAt: serverTimestamp()
-      });
+      const batch = writeBatch(db);
+      
+      for (const id of idsToUpdate) {
+        const p = purchasedItems.find(item => item.id === id);
+        batch.update(doc(db, 'procurements', id), {
+          ...formData,
+          status: 'NOTE_APPROVED',
+          updatedAt: serverTimestamp()
+        });
 
-      // Notify User and Admin
-      if (p) {
-        // Notify Requester
-        await sendNotification(
-          p.userId,
-          'Approval Note Created',
-          `An approval note has been generated for ${p.itemDescription}.`,
-          'STATUS_CHANGE',
-          selectedId
-        );
-        // Notify Admins
-        for (const adminUid of adminUids) {
-          if (adminUid === user?.uid) continue;
+        // Queue notifications
+        if (p) {
+          // Notify Requester
           await sendNotification(
-            adminUid,
-            'Note Approved',
-            `Approval note #${formData.approvalNoteNo} recorded for ${p.itemDescription}.`,
-            'INFO',
-            selectedId
+            p.userId,
+            'Approval Note Created',
+            `An approval note has been generated for ${p.itemDescription}.`,
+            'STATUS_CHANGE',
+            id
           );
+          // Notify Admins
+          for (const adminUid of adminUids) {
+            if (adminUid === user?.uid) continue;
+            await sendNotification(
+              adminUid,
+              'Note Approved',
+              `Approval note #${formData.approvalNoteNo} recorded for ${p.itemDescription}.`,
+              'INFO',
+              id
+            );
+          }
         }
       }
 
+      await batch.commit();
+
       setSelectedId(null);
+      setSelectedIds([]);
       setFormData({ approvalNoteNo: '', approvalNoteDate: format(new Date(), "yyyy-MM-dd") });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `procurements/${selectedId}`);
+      handleFirestoreError(error, OperationType.UPDATE, `procurements/batch-approval`);
     } finally {
       setSubmitting(false);
     }
@@ -2277,65 +2723,141 @@ function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { p
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className={`${selectedId ? 'hidden lg:block' : 'block'}`}>
         <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Approval Status</h2>
         <p className="text-slate-500">Record final approval note details for purchased items</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-1 space-y-3">
-          <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-2">Purchased Items</h3>
-          {purchasedItems.length === 0 ? (
-            <div className="bg-slate-100 rounded-xl p-6 text-center text-slate-400">
-              No items awaiting approval note
+        <div className={`lg:col-span-1 space-y-4 ${selectedId ? 'hidden lg:block' : 'block'}`}>
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Filters</h3>
+            <div className="space-y-2">
+              <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-2">
+                <Calendar size={14} className="text-slate-400" />
+                <input 
+                  type="date" 
+                  value={dateFilter} 
+                  onChange={e => setDateFilter(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-700 focus:ring-0 w-full p-0"
+                />
+              </div>
+              <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-2">
+                <Tag size={14} className="text-emerald-500" />
+                <input 
+                  type="text" 
+                  list="vendor-list"
+                  placeholder="Vendor (AI/Select)..."
+                  value={vendorFilter} 
+                  onChange={e => setVendorFilter(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-700 focus:ring-0 w-full p-0 placeholder:text-slate-400"
+                />
+              </div>
+              <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-2">
+                <UserIcon size={14} className="text-slate-400" />
+                <input 
+                  type="text" 
+                  placeholder="Requester..."
+                  value={requestorFilter} 
+                  onChange={e => setRequestorFilter(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-700 focus:ring-0 w-full p-0 placeholder:text-slate-400"
+                />
+              </div>
+              {(dateFilter || vendorFilter || requestorFilter) && (
+                <button 
+                  onClick={() => { setDateFilter(''); setVendorFilter(''); setRequestorFilter(''); }}
+                  className="w-full text-[10px] font-bold text-rose-500 uppercase hover:text-rose-600 pt-1"
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between px-1 mb-2">
+            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Purchased Items</h3>
+            {filteredItems.length > 0 && (
+              <button 
+                onClick={() => selectAll(filteredItems)}
+                className="text-[10px] font-bold text-indigo-600 hover:underline"
+              >
+                {selectedIds.length === filteredItems.length ? 'Deselect All' : 'Select All'}
+              </button>
+            )}
+          </div>
+          {filteredItems.length === 0 ? (
+            <div className="bg-slate-100 rounded-xl p-6 text-center text-slate-400 text-sm italic">
+              No matching items found
             </div>
           ) : (
-            purchasedItems.map(p => {
+            filteredItems.map(p => {
               const delay = differenceInCalendarDays(new Date(), parseDate(p.purchaseDate));
+              const isSelected = selectedIds.includes(p.id);
               return (
-                <button
-                  key={p.id}
-                  onClick={() => setSelectedId(p.id)}
-                  className={`w-full p-4 rounded-2xl text-left border transition-all flex justify-between items-start ${selectedId === p.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-200' : 'bg-white border-slate-200 hover:border-indigo-500 text-slate-900 group'}`}
-                >
-                  <div className="flex-1 truncate">
-                    <p className="font-bold truncate">{p.itemDescription}</p>
-                    <p className={`text-[10px] mt-1 ${selectedId === p.id ? 'text-indigo-100' : 'text-slate-500'}`}>Req: {p.requestName || p.userName}</p>
-                    <p className="text-xs opacity-70 mt-1">Vendor: {p.vendorName}</p>
-                  </div>
-                  <div className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${selectedId === p.id ? 'bg-indigo-400 text-white' : 'bg-rose-50 text-rose-600'}`}>
-                    <Clock size={10} />
-                    {delay}d Delay
-                  </div>
-                </button>
+                <div key={p.id} className="flex items-center gap-2 group">
+                  <button 
+                    onClick={() => toggleSelect(p.id)}
+                    className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
+                  >
+                    {isSelected && <Check size={14} strokeWidth={3} />}
+                  </button>
+                  <button
+                    onClick={() => setSelectedId(p.id)}
+                    className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-white border-slate-100 hover:border-indigo-500 text-slate-900 shadow-sm'}`}
+                  >
+                    <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
+                    <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                      <Clock size={10} />
+                      {delay}d
+                    </div>
+                  </button>
+                </div>
               );
             })
           )}
         </div>
 
-        <div className="lg:col-span-2">
-          {selectedId ? (
+        <div className={`lg:col-span-2 ${(selectedId || selectedIds.length > 0) ? 'block' : 'hidden lg:block'}`}>
+          {(selectedId || selectedIds.length > 0) ? (
             <motion.div 
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden"
             >
               <div className="p-8 border-b border-slate-100 bg-slate-50">
-                <span className="text-xs font-bold bg-rose-100 text-rose-600 px-2 py-0.5 rounded uppercase tracking-wider mb-2 inline-block">Awaiting Note</span>
-                <h3 className="font-bold text-lg text-slate-900">Submit Approval Note for:</h3>
-                <p className="text-indigo-600 font-medium mb-4">{purchasedItems.find(p => p.id === selectedId)?.itemDescription}</p>
+                <span className="text-xs font-bold bg-rose-100 text-rose-600 px-2 py-0.5 rounded uppercase tracking-wider mb-2 inline-block">
+                  {selectedIds.length > 1 ? 'Bulk Forwarding' : 'Awaiting Note'}
+                </span>
+                <h3 className="font-bold text-lg text-slate-900">
+                  {selectedIds.length > 1 
+                    ? `Submit Approval Note for ${selectedIds.length} Items:`
+                    : `Submit Approval Note for:`}
+                </h3>
                 
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                  <DetailBox label="Requester" value={purchasedItems.find(p => p.id === selectedId)?.requestName || purchasedItems.find(p => p.id === selectedId)?.userName} />
-                  <DetailBox label="Purchased On" value={format(parseDate(purchasedItems.find(p => p.id === selectedId)?.purchaseDate), 'MMM d, yyyy')} />
-                  <DetailBox label="Vendor" value={purchasedItems.find(p => p.id === selectedId)?.vendorName} />
-                  <DetailBox label="Actual Cost" value={`₹${purchasedItems.find(p => p.id === selectedId)?.actualCost}`} />
-                  <DetailBox label="Invoice" value={purchasedItems.find(p => p.id === selectedId)?.invoiceNumber} />
-                </div>
-                {purchasedItems.find(p => p.id === selectedId)?.purchaseRemarks && (
-                  <div className="mt-3 p-3 bg-white rounded-xl border border-slate-200">
-                    <p className="text-[10px] text-slate-400 uppercase font-bold">Purchase Remarks</p>
-                    <p className="text-xs text-slate-600 italic">{purchasedItems.find(p => p.id === selectedId)?.purchaseRemarks}</p>
+                {selectedIds.length <= 1 ? (
+                  <>
+                    <p className="text-indigo-600 font-medium mb-4">
+                      {purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.itemDescription}
+                    </p>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                      <DetailBox label="Requester" value={purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.requestName || purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.userName} />
+                      <DetailBox label="Purchased On" value={format(parseDate(purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.purchaseDate), 'MMM d, yyyy')} />
+                      <DetailBox label="Vendor" value={purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.vendorName} />
+                      <DetailBox label="Actual Cost" value={`₹${purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.actualCost}`} />
+                      <DetailBox label="Invoice" value={purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.invoiceNumber} />
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-4 p-4 bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 max-h-40 overflow-y-auto">
+                    {selectedIds.map(id => {
+                      const item = purchasedItems.find(p => p.id === id);
+                      return (
+                        <div key={id} className="py-2 flex justify-between items-center text-xs">
+                          <span className="font-bold text-slate-700 truncate pr-4">{item?.itemDescription}</span>
+                          <span className="text-slate-400 shrink-0">{item?.vendorName} (₹{item?.actualCost})</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -2347,17 +2869,18 @@ function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { p
                 <div className="flex justify-between items-center pt-4">
                   <button 
                     type="button"
-                    onClick={() => setSelectedId(null)}
+                    onClick={() => { setSelectedId(null); setSelectedIds([]); }}
                     className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-all"
                   >
-                    Go Back
+                    Cancel
                   </button>
                   <button 
                     type="submit" 
-                    disabled={submitting}
-                    className="bg-indigo-600 text-white px-10 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50"
+                    disabled={submitting || (selectedIds.length === 0 && !selectedId)}
+                    className="bg-indigo-600 text-white px-10 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {submitting ? 'Recording...' : 'Record Approval'}
+                    {selectedIds.length > 1 && <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] ml-2">{selectedIds.length} Items</span>}
                   </button>
                 </div>
               </form>
@@ -2382,6 +2905,28 @@ function PaymentLedger({ procurements, sendNotification, adminUids, user }: { pr
   const [formData, setFormData] = useState({
     paymentDate: format(new Date(), "yyyy-MM-dd"),
     paymentAmount: 0
+  });
+
+  // Filters
+  const [dateFilter, setDateFilter] = useState('');
+  const [vendorFilter, setVendorFilter] = useState('');
+  const [requestorFilter, setRequestorFilter] = useState('');
+
+  const vendorMatchIds = React.useMemo(() => {
+    if (!vendorFilter) return null;
+    const fuse = new Fuse(procurements, {
+      keys: ['vendorName'],
+      threshold: 0.4,
+      distance: 100,
+    });
+    return new Set(fuse.search(vendorFilter).map(r => r.item.id));
+  }, [procurements, vendorFilter]);
+
+  const filteredItems = approvedNotesItems.filter(p => {
+    const matchesDate = !dateFilter || format(parseDate(p.approvalNoteDate), 'yyyy-MM-dd') === dateFilter;
+    const matchesVendor = !vendorFilter || (vendorMatchIds && vendorMatchIds.has(p.id));
+    const matchesRequestor = !requestorFilter || (p.requestName || p.userName || '').toLowerCase().includes(requestorFilter.toLowerCase());
+    return matchesDate && matchesVendor && matchesRequestor;
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -2429,38 +2974,77 @@ function PaymentLedger({ procurements, sendNotification, adminUids, user }: { pr
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className={`${selectedId ? 'hidden lg:block' : 'block'}`}>
         <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Payment Ledger</h2>
         <p className="text-slate-500">Track and settle payments for approved procurements</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-1 space-y-6">
+        <div className={`lg:col-span-1 space-y-6 ${selectedId ? 'hidden lg:block' : 'block'}`}>
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Filters</h3>
+            <div className="space-y-2">
+              <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-2">
+                <Calendar size={14} className="text-slate-400" />
+                <input 
+                  type="date" 
+                  value={dateFilter} 
+                  onChange={e => setDateFilter(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-700 focus:ring-0 w-full p-0"
+                />
+              </div>
+              <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-2">
+                <Tag size={14} className="text-amber-500" />
+                <input 
+                  type="text" 
+                  list="vendor-list"
+                  placeholder="Vendor (AI/Select)..."
+                  value={vendorFilter} 
+                  onChange={e => setVendorFilter(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-700 focus:ring-0 w-full p-0 placeholder:text-slate-400"
+                />
+              </div>
+              <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-2">
+                <UserIcon size={14} className="text-slate-400" />
+                <input 
+                  type="text" 
+                  placeholder="Requester..."
+                  value={requestorFilter} 
+                  onChange={e => setRequestorFilter(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-700 focus:ring-0 w-full p-0 placeholder:text-slate-400"
+                />
+              </div>
+              {(dateFilter || vendorFilter || requestorFilter) && (
+                <button 
+                  onClick={() => { setDateFilter(''); setVendorFilter(''); setRequestorFilter(''); }}
+                  className="w-full text-[10px] font-bold text-rose-500 uppercase hover:text-rose-600 pt-1"
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+          </div>
+
           <div>
-            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Pending Payments</h3>
+            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4 px-1">Pending Payments</h3>
             <div className="space-y-3">
-              {approvedNotesItems.length === 0 ? (
+              {filteredItems.length === 0 ? (
                 <div className="bg-slate-100 rounded-xl p-4 text-center text-slate-400 text-sm italic">
-                  No payments pending
+                  No pending matching items
                 </div>
               ) : (
-                approvedNotesItems.map(p => {
+                filteredItems.map(p => {
                   const delay = differenceInCalendarDays(new Date(), parseDate(p.approvalNoteDate));
                   return (
                     <button
                       key={p.id}
                       onClick={() => setSelectedId(p.id)}
-                      className={`w-full p-4 rounded-2xl text-left border transition-all ${selectedId === p.id ? 'bg-amber-600 border-amber-600 text-white shadow-lg shadow-amber-200' : 'bg-white border-slate-200 hover:border-amber-500 shadow-sm'}`}
+                      className={`w-full p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-amber-600 border-amber-600 text-white shadow-lg shadow-amber-100' : 'bg-white border-slate-100 hover:border-amber-500 shadow-sm'}`}
                     >
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="font-bold text-sm truncate flex-1">{p.itemDescription}</span>
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${selectedId === p.id ? 'bg-amber-400' : 'bg-rose-50 text-rose-600'}`}>
-                          {delay}d Delay
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-[11px] opacity-80">
-                        <span>Amt: ₹{p.actualCost}</span>
-                        <span>Note: {p.approvalNoteNo}</span>
+                      <span className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</span>
+                      <div className={`text-[10px] font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                        <Clock size={10} />
+                        {delay}d
                       </div>
                     </button>
                   );
@@ -2482,7 +3066,7 @@ function PaymentLedger({ procurements, sendNotification, adminUids, user }: { pr
           </div>
         </div>
 
-        <div className="lg:col-span-2">
+        <div className={`lg:col-span-2 ${selectedId ? 'block' : 'hidden lg:block'}`}>
           {selectedId ? (
             <motion.div 
               initial={{ opacity: 0, x: 20 }}
@@ -2585,102 +3169,113 @@ const AdminCard: React.FC<{
   onAction: (id: string, s: ProcurementStatus, r: string) => Promise<void> | void, 
   loading: boolean,
   isSelected: boolean,
-  onSelect: () => void
-}> = ({ item, onAction, loading, isSelected, onSelect }) => {
+  onSelect: () => void,
+  onClose?: () => void
+}> = ({ item, onAction, loading, isSelected, onSelect, onClose }) => {
   const [remarks, setRemarks] = useState('');
   
   return (
     <motion.div 
       layout
-      className={`bg-white rounded-2xl p-6 shadow-sm border transition-all flex flex-col md:flex-row gap-6 ${isSelected ? 'border-indigo-400 ring-2 ring-indigo-50 shadow-md transform scale-[1.01]' : 'border-slate-200'}`}
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      className={`bg-white rounded-3xl p-8 shadow-sm border transition-all flex flex-col gap-8 ${isSelected ? 'border-indigo-400 ring-4 ring-indigo-50 shadow-xl' : 'border-slate-200'}`}
     >
-      <div className="flex items-start">
-        <button 
-          onClick={onSelect}
-          className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all mt-1 ${isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}
-        >
-          {isSelected && <Check size={14} strokeWidth={3} />}
-        </button>
+      <div className="flex justify-between items-start">
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={onSelect}
+            className={`w-8 h-8 rounded-xl border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}
+          >
+            {isSelected && <Check size={18} strokeWidth={3} />}
+          </button>
+          <div>
+            <h3 className="text-2xl font-black text-slate-900 tracking-tight">{item.itemDescription}</h3>
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">Request ID: {item.id.slice(0, 8)}</p>
+          </div>
+        </div>
+        {onClose && (
+          <button 
+            onClick={onClose}
+            className="p-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-500 transition-colors"
+          >
+            <X size={20} />
+          </button>
+        )}
       </div>
 
-      <div className="flex-1 space-y-3">
-        <div className="flex items-center gap-3">
-          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-            item.priority === 'Urgent' ? 'bg-rose-100 text-rose-700' :
-            item.priority === 'High' ? 'bg-amber-100 text-amber-700' :
-            'bg-slate-100 text-slate-600'
-          }`}>
-            {item.priority} Priority
-          </span>
-          <span className="text-[10px] text-slate-400 font-medium">Requested on {format(parseDate(item.requestDate), 'MMM d, h:mm a')}</span>
-        </div>
-        <h3 className="text-xl font-bold text-slate-900">{item.itemDescription}</h3>
-        <div className="flex flex-wrap items-center gap-3 mb-1">
-          <div className="flex items-center gap-1.5 bg-slate-100 px-2 py-1 rounded-lg text-slate-600">
-            <UserIcon size={12} />
-            <span className="text-xs font-bold whitespace-nowrap">Requested by: {item.requestName || item.userName}</span>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div className="md:col-span-2 space-y-8">
+          <div className="grid grid-cols-2 gap-4">
+            <DetailBox label="Requester" value={item.requestName || item.userName} />
+            <DetailBox label="Priority" value={`${item.priority} Priority`} />
+            <DetailBox label="Est. Cost" value={`₹${item.estCost}`} />
+            <DetailBox label="Quantity" value={`${item.quantity} ${item.unit}`} />
           </div>
-          {item.purchaserName && (
-            <div className="flex items-center gap-1.5 bg-indigo-50 px-2 py-1 rounded-lg text-indigo-600">
-              <ShoppingCart size={12} />
-              <span className="text-xs font-bold whitespace-nowrap">Purchaser: {item.purchaserName}</span>
+
+          <div className="bg-slate-50/50 p-6 rounded-2xl border border-slate-100 space-y-2">
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+               <Info size={14} className="text-indigo-400" />
+               Purpose of Request
+            </p>
+            <p className="text-slate-700 leading-relaxed font-medium">{item.purpose}</p>
+          </div>
+        </div>
+
+        <div className="space-y-6 bg-slate-50/50 p-6 rounded-2xl border border-slate-100 h-fit">
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Admin Remarks</label>
+            <textarea 
+              className="w-full bg-white border border-slate-200 rounded-xl p-4 text-sm resize-none focus:ring-2 focus:ring-emerald-500 outline-none transition-all shadow-sm" 
+              placeholder="Enter your review notes here..."
+              rows={4}
+              value={remarks}
+              onChange={e => setRemarks(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-2 pt-2">
+            <button 
+              onClick={() => onAction(item.id, 'APPROVED', remarks)}
+              disabled={loading}
+              className="w-full bg-emerald-600 text-white rounded-xl py-4 font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              <CheckCircle2 size={18} />
+              Approve Request
+            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button 
+                onClick={() => onAction(item.id, 'REJECTED', remarks)}
+                disabled={loading}
+                className="bg-white text-rose-600 border border-rose-200 rounded-xl py-3 text-xs font-bold hover:bg-rose-50 transition-all disabled:opacity-50"
+              >
+                Reject
+              </button>
+              <button 
+                onClick={() => onAction(item.id, 'PENDING', remarks)}
+                disabled={loading}
+                className="bg-white text-slate-500 border border-slate-200 rounded-xl py-3 text-xs font-bold hover:bg-slate-50 transition-all disabled:opacity-50"
+              >
+                Pending
+              </button>
             </div>
-          )}
-        </div>
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <p className="text-slate-400 text-xs uppercase font-bold tracking-tight">Quantity</p>
-            <p className="font-semibold text-slate-700">{item.quantity} {item.unit}</p>
-          </div>
-          <div>
-            <p className="text-slate-400 text-xs uppercase font-bold tracking-tight">Est. Cost</p>
-            <p className="font-semibold text-slate-700">₹{item.estCost}</p>
-          </div>
-          <div className="col-span-2">
-            <p className="text-slate-400 text-xs uppercase font-bold tracking-tight">Purpose</p>
-            <p className="text-slate-600 leading-relaxed">{item.purpose}</p>
           </div>
         </div>
       </div>
-
-      <div className="w-full md:w-80 space-y-4 pt-4 md:pt-0 md:pl-6 md:border-l border-slate-100">
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-bold text-slate-500 uppercase h-4">Remarks</label>
-          <textarea 
-            className="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm resize-none focus:ring-2 focus:ring-emerald-500 outline-none transition-all" 
-            placeholder="Review notes..."
-            rows={2}
-            value={remarks}
-            onChange={e => setRemarks(e.target.value)}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
+      
+      {onClose && (
+        <div className="md:hidden pt-4 border-t border-slate-100">
           <button 
-            onClick={() => onAction(item.id, 'APPROVED', remarks)}
-            disabled={loading}
-            className="flex-1 bg-emerald-600 text-white rounded-lg py-2.5 text-xs font-bold hover:bg-emerald-700 transition-colors disabled:opacity-50"
+            onClick={onClose}
+            className="w-full py-4 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-all"
           >
-            Approve
-          </button>
-          <button 
-            onClick={() => onAction(item.id, 'REJECTED', remarks)}
-            disabled={loading}
-            className="flex-1 bg-slate-100 text-slate-600 rounded-lg py-2.5 text-xs font-bold hover:bg-rose-50 hover:text-rose-600 transition-colors disabled:opacity-50"
-          >
-            Reject
-          </button>
-          <button 
-            onClick={() => onAction(item.id, 'PENDING', remarks)}
-            disabled={loading}
-            className="col-span-2 bg-slate-50 text-slate-500 rounded-lg py-2 text-xs font-bold hover:bg-slate-200 transition-colors disabled:opacity-50"
-          >
-            Mark Pending
+            Go Back to List
           </button>
         </div>
-      </div>
+      )}
     </motion.div>
   );
-}
+};
 
 function AdminManagement({ authorizedUsers, showAlert, showConfirm, accessRequests }: { 
   authorizedUsers: {id: string, email: string, role?: 'USER' | 'ADMIN'}[],
