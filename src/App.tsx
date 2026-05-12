@@ -543,18 +543,18 @@ export default function App() {
 
       {/* Sidebar/Navigation */}
       <aside className={`
-        fixed md:static inset-0 z-40 bg-white border-r border-slate-200 w-72 transform transition-transform duration-300 ease-in-out
+        fixed md:sticky md:top-0 md:h-screen inset-0 z-40 bg-white border-r border-slate-200 w-72 transform transition-transform duration-300 ease-in-out
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
         <div className="flex flex-col h-full p-6">
-          <div className="hidden md:flex items-center gap-3 mb-10">
+          <div className="hidden md:flex items-center gap-3 mb-10 shrink-0">
             <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-200">
               <LayoutDashboard className="w-6 h-6 text-white" />
             </div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">PlantProcure</h1>
           </div>
 
-          <nav className="flex-1 space-y-1">
+          <nav className="flex-1 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-100 scrollbar-track-transparent pr-2">
             <NavItem 
               active={activeTab === 'dashboard'} 
               onClick={() => { setActiveTab('dashboard'); setIsSidebarOpen(false); }}
@@ -580,13 +580,14 @@ export default function App() {
                   onClick={() => { setActiveTab('admin'); setIsSidebarOpen(false); }}
                   icon={<ShieldCheck size={18} />}
                   label="Admin Review"
-                  badge={procurements.filter(p => p.status === 'REQUESTED' || p.status === 'PENDING').length + accessRequests.length}
+                  badge={procurements.filter(p => p.status === 'REQUESTED' || p.status === 'PENDING').length}
                 />
                 <NavItem 
                   active={activeTab === 'settings'} 
                   onClick={() => { setActiveTab('settings'); setIsSidebarOpen(false); }}
                   icon={<Settings size={18} />}
                   label="Admin Settings"
+                  badge={accessRequests.length}
                 />
               </>
             )}
@@ -1454,7 +1455,8 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
     });
   };
 
-  const pendingRequests = filterProcurements(procurements.filter(p => ['REQUESTED', 'PENDING'].includes(p.status)));
+  const pendingRequests = filterProcurements(procurements.filter(p => ['REQUESTED', 'PENDING'].includes(p.status)))
+    .sort((a, b) => parseDate(a.requestDate).getTime() - parseDate(b.requestDate).getTime());
   const reviewHistory = filterProcurements(procurements.filter(p => ['APPROVED', 'REJECTED', 'PURCHASED', 'NOTE_APPROVED', 'PAYMENT_DONE'].includes(p.status)));
 
   const exportToPDF = () => {
@@ -1834,83 +1836,85 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className={`lg:col-span-1 space-y-6 ${selectedId ? 'hidden lg:block' : 'block'}`}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Clock className="text-amber-500" size={20} />
-              <h3 className="text-lg font-bold text-slate-800">Pending Requests</h3>
-              <span className="bg-amber-100 text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full">
-                {pendingRequests.length}
-              </span>
-            </div>
-            {pendingRequests.length > 0 && (
-               <button 
-                onClick={selectAll}
-                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5"
-               >
-                 <CheckSquare size={14} />
-                 {selectedIds.length === pendingRequests.length ? 'Deselect All' : 'Select All'}
-               </button>
-            )}
-          </div>
-
-          {pendingRequests.length === 0 ? (
-            <div className="bg-white rounded-3xl p-10 text-center border border-slate-200 border-dashed">
-              <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-3 opacity-50" />
-              <p className="text-slate-400">No new requests awaiting review</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {pendingRequests.map(p => {
-                const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
-                return (
-                  <div key={p.id} className="flex items-center gap-2 group">
-                    <button 
-                      onClick={() => toggleSelect(p.id)}
-                      className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${selectedIds.includes(p.id) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
-                    >
-                      {selectedIds.includes(p.id) && <Check size={14} strokeWidth={3} />}
-                    </button>
-                    <button
-                      onClick={() => setSelectedId(p.id)}
-                      className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-white border-slate-100 hover:border-indigo-500 text-slate-900 shadow-sm'}`}
-                    >
-                      <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
-                      <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
-                        <Clock size={10} />
-                        {delay}d
-                      </div>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="pt-10 border-t border-slate-200">
-            <div className="flex items-center gap-3 mb-6">
-              <ShieldCheck className="text-emerald-500" size={20} />
-              <h3 className="text-lg font-bold text-slate-800">Review History</h3>
-              <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">
-                {reviewHistory.length}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4">
-              {reviewHistory.length === 0 ? (
-                <div className="bg-slate-50 rounded-2xl p-8 text-center border border-slate-100">
-                  <p className="text-slate-400 text-sm italic">No history available</p>
-                </div>
-              ) : (
-                reviewHistory.slice(0, 10).map(p => (
-                  <div key={p.id} className="bg-white border border-slate-50 p-3 rounded-xl shadow-sm flex items-center justify-between gap-3">
-                    <div className="truncate flex-1">
-                      <p className="font-bold text-xs text-slate-900 truncate">{p.itemDescription}</p>
-                      <p className="text-[10px] text-slate-500">Req: {p.requestName || p.userName}</p>
-                    </div>
-                    <StatusBadge status={p.status} />
-                  </div>
-                ))
+          <div className="max-h-[calc(100vh-250px)] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <Clock className="text-amber-500" size={20} />
+                <h3 className="text-lg font-bold text-slate-800">Pending Requests</h3>
+                <span className="bg-amber-100 text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                  {pendingRequests.length}
+                </span>
+              </div>
+              {pendingRequests.length > 0 && (
+                 <button 
+                  onClick={selectAll}
+                  className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5"
+                 >
+                   <CheckSquare size={14} />
+                   {selectedIds.length === pendingRequests.length ? 'Deselect All' : 'Select All'}
+                 </button>
               )}
+            </div>
+
+            {pendingRequests.length === 0 ? (
+              <div className="bg-white rounded-3xl p-10 text-center border border-slate-200 border-dashed">
+                <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-3 opacity-50" />
+                <p className="text-slate-400">No new requests awaiting review</p>
+              </div>
+            ) : (
+              <div className="space-y-3 mb-8">
+                {pendingRequests.map(p => {
+                  const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
+                  return (
+                    <div key={p.id} className="flex items-center gap-2 group">
+                      <button 
+                        onClick={() => toggleSelect(p.id)}
+                        className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${selectedIds.includes(p.id) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
+                      >
+                        {selectedIds.includes(p.id) && <Check size={14} strokeWidth={3} />}
+                      </button>
+                      <button
+                        onClick={() => setSelectedId(p.id)}
+                        className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-white border-slate-100 hover:border-indigo-500 text-slate-900 shadow-sm'}`}
+                      >
+                        <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
+                        <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                          <Clock size={10} />
+                          {delay}d
+                        </div>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="pt-10 border-t border-slate-200">
+              <div className="flex items-center gap-3 mb-6">
+                <ShieldCheck className="text-emerald-500" size={20} />
+                <h3 className="text-lg font-bold text-slate-800">Review History</h3>
+                <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">
+                  {reviewHistory.length}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4">
+                {reviewHistory.length === 0 ? (
+                  <div className="bg-slate-50 rounded-2xl p-8 text-center border border-slate-100">
+                    <p className="text-slate-400 text-sm italic">No history available</p>
+                  </div>
+                ) : (
+                  reviewHistory.slice(0, 10).map(p => (
+                    <div key={p.id} className="bg-white border border-slate-50 p-3 rounded-xl shadow-sm flex items-center justify-between gap-3">
+                      <div className="truncate flex-1">
+                        <p className="font-bold text-xs text-slate-900 truncate">{p.itemDescription}</p>
+                        <p className="text-[10px] text-slate-500">Req: {p.requestName || p.userName}</p>
+                      </div>
+                      <StatusBadge status={p.status} />
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -2038,7 +2042,7 @@ function TrackingDashboard({ procurements }: { procurements: Procurement[] }) {
     }
     
     return matchesStatus && matchesSearch && matchesVendor && matchesRequestor && matchesDate;
-  });
+  }).sort((a, b) => parseDate(a.requestDate).getTime() - parseDate(b.requestDate).getTime());
 
   const getStepName = (status: ProcurementStatus) => {
     const names: Record<ProcurementStatus, string> = {
@@ -2126,30 +2130,32 @@ function TrackingDashboard({ procurements }: { procurements: Procurement[] }) {
              )}
            </div>
 
-          {filtered.length === 0 ? (
-            <div className="bg-slate-100 rounded-2xl p-8 text-center text-slate-400 text-sm italic">
-              No matching requests
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {filtered.map(p => {
-                const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => setSelectedId(p.id)}
-                    className={`w-full p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-white border-slate-100 hover:border-emerald-500 text-slate-900 shadow-sm'}`}
-                  >
-                    <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
-                    <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                      <Clock size={10} />
-                      {delay}d
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+           <div className="space-y-2 max-h-[calc(100vh-320px)] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+             {filtered.length === 0 ? (
+               <div className="bg-slate-100 rounded-2xl p-8 text-center text-slate-400 text-sm italic">
+                 No matching requests
+               </div>
+             ) : (
+               <div className="space-y-2">
+                 {filtered.map(p => {
+                   const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
+                   return (
+                     <button
+                       key={p.id}
+                       onClick={() => setSelectedId(p.id)}
+                       className={`w-full p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-white border-slate-100 hover:border-emerald-500 text-slate-900 shadow-sm mb-2'}`}
+                     >
+                       <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
+                       <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                         <Clock size={10} />
+                         {delay}d
+                       </div>
+                     </button>
+                   );
+                 })}
+               </div>
+             )}
+           </div>
         </div>
 
         <div className={`lg:col-span-2 ${selectedId ? 'block' : 'hidden lg:block'}`}>
@@ -2275,7 +2281,8 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
   sendNotification: any,
   adminUids: string[]
 }) {
-  const approvedItems = procurements.filter(p => p.status === 'APPROVED');
+  const approvedItems = procurements.filter(p => p.status === 'APPROVED')
+    .sort((a, b) => parseDate(a.requestDate).getTime() - parseDate(b.requestDate).getTime());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -2471,36 +2478,38 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
               </button>
             )}
           </div>
-          {filteredItems.length === 0 ? (
-            <div className="bg-slate-100 rounded-xl p-6 text-center text-slate-400 text-sm italic">
-              No matching items found
-            </div>
-          ) : (
-            filteredItems.map(p => {
-              const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
-              const isSelected = selectedIds.includes(p.id);
-              return (
-                <div key={p.id} className="flex items-center gap-2 group">
-                  <button 
-                    onClick={() => toggleSelect(p.id)}
-                    className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${isSelected ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
-                  >
-                    {isSelected && <Check size={14} strokeWidth={3} />}
-                  </button>
-                  <button
-                    onClick={() => setSelectedId(p.id)}
-                    className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-white border-slate-100 hover:border-emerald-500 text-slate-900 shadow-sm'}`}
-                  >
-                    <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
-                    <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
-                      <Clock size={10} />
-                      {delay}d
-                    </div>
-                  </button>
-                </div>
-              );
-            })
-          )}
+          <div className="space-y-4 max-h-[calc(100vh-320px)] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+            {filteredItems.length === 0 ? (
+              <div className="bg-slate-100 rounded-xl p-6 text-center text-slate-400 text-sm italic">
+                No matching items found
+              </div>
+            ) : (
+              filteredItems.map(p => {
+                const delay = differenceInCalendarDays(new Date(), parseDate(p.requestDate));
+                const isSelected = selectedIds.includes(p.id);
+                return (
+                  <div key={p.id} className="flex items-center gap-2 group mb-3">
+                    <button 
+                      onClick={() => toggleSelect(p.id)}
+                      className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${isSelected ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
+                    >
+                      {isSelected && <Check size={14} strokeWidth={3} />}
+                    </button>
+                    <button
+                      onClick={() => setSelectedId(p.id)}
+                      className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-white border-slate-100 hover:border-emerald-500 text-slate-900 shadow-sm'}`}
+                    >
+                      <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
+                      <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                        <Clock size={10} />
+                        {delay}d
+                      </div>
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
 
         <div className={`lg:col-span-2 ${(selectedId || selectedIds.length > 0) ? 'block' : 'hidden lg:block'}`}>
@@ -2625,7 +2634,8 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
 }
 
 function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { procurements: Procurement[], sendNotification: any, adminUids: string[], user: User | null }) {
-  const purchasedItems = procurements.filter(p => p.status === 'PURCHASED');
+  const purchasedItems = procurements.filter(p => p.status === 'PURCHASED')
+    .sort((a, b) => parseDate(a.purchaseDate).getTime() - parseDate(b.purchaseDate).getTime());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -2785,36 +2795,38 @@ function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { p
               </button>
             )}
           </div>
-          {filteredItems.length === 0 ? (
-            <div className="bg-slate-100 rounded-xl p-6 text-center text-slate-400 text-sm italic">
-              No matching items found
-            </div>
-          ) : (
-            filteredItems.map(p => {
-              const delay = differenceInCalendarDays(new Date(), parseDate(p.purchaseDate));
-              const isSelected = selectedIds.includes(p.id);
-              return (
-                <div key={p.id} className="flex items-center gap-2 group">
-                  <button 
-                    onClick={() => toggleSelect(p.id)}
-                    className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
-                  >
-                    {isSelected && <Check size={14} strokeWidth={3} />}
-                  </button>
-                  <button
-                    onClick={() => setSelectedId(p.id)}
-                    className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-white border-slate-100 hover:border-indigo-500 text-slate-900 shadow-sm'}`}
-                  >
-                    <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
-                    <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
-                      <Clock size={10} />
-                      {delay}d
-                    </div>
-                  </button>
-                </div>
-              );
-            })
-          )}
+          <div className="space-y-4 max-h-[calc(100vh-320px)] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+            {filteredItems.length === 0 ? (
+              <div className="bg-slate-100 rounded-xl p-6 text-center text-slate-400 text-sm italic">
+                No matching items found
+              </div>
+            ) : (
+              filteredItems.map(p => {
+                const delay = differenceInCalendarDays(new Date(), parseDate(p.purchaseDate));
+                const isSelected = selectedIds.includes(p.id);
+                return (
+                  <div key={p.id} className="flex items-center gap-2 group mb-3">
+                    <button 
+                      onClick={() => toggleSelect(p.id)}
+                      className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all shrink-0 ${isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
+                    >
+                      {isSelected && <Check size={14} strokeWidth={3} />}
+                    </button>
+                    <button
+                      onClick={() => setSelectedId(p.id)}
+                      className={`flex-1 p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-white border-slate-100 hover:border-indigo-500 text-slate-900 shadow-sm'}`}
+                    >
+                      <p className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</p>
+                      <div className={`text-[10px] uppercase font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                        <Clock size={10} />
+                        {delay}d
+                      </div>
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
 
         <div className={`lg:col-span-2 ${(selectedId || selectedIds.length > 0) ? 'block' : 'hidden lg:block'}`}>
@@ -2898,7 +2910,8 @@ function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { p
 }
 
 function PaymentLedger({ procurements, sendNotification, adminUids, user }: { procurements: Procurement[], sendNotification: any, adminUids: string[], user: User | null }) {
-  const approvedNotesItems = procurements.filter(p => p.status === 'NOTE_APPROVED');
+  const approvedNotesItems = procurements.filter(p => p.status === 'NOTE_APPROVED')
+    .sort((a, b) => parseDate(a.approvalNoteDate).getTime() - parseDate(b.approvalNoteDate).getTime());
   const paidItems = procurements.filter(p => p.status === 'PAYMENT_DONE');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -3025,43 +3038,45 @@ function PaymentLedger({ procurements, sendNotification, adminUids, user }: { pr
             </div>
           </div>
 
-          <div>
-            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4 px-1">Pending Payments</h3>
-            <div className="space-y-3">
-              {filteredItems.length === 0 ? (
-                <div className="bg-slate-100 rounded-xl p-4 text-center text-slate-400 text-sm italic">
-                  No pending matching items
-                </div>
-              ) : (
-                filteredItems.map(p => {
-                  const delay = differenceInCalendarDays(new Date(), parseDate(p.approvalNoteDate));
-                  return (
-                    <button
-                      key={p.id}
-                      onClick={() => setSelectedId(p.id)}
-                      className={`w-full p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-amber-600 border-amber-600 text-white shadow-lg shadow-amber-100' : 'bg-white border-slate-100 hover:border-amber-500 shadow-sm'}`}
-                    >
-                      <span className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</span>
-                      <div className={`text-[10px] font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
-                        <Clock size={10} />
-                        {delay}d
-                      </div>
-                    </button>
-                  );
-                })
-              )}
+          <div className="max-h-[calc(100vh-320px)] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent space-y-6">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4 px-1">Pending Payments</h3>
+              <div className="space-y-3">
+                {filteredItems.length === 0 ? (
+                  <div className="bg-slate-100 rounded-xl p-4 text-center text-slate-400 text-sm italic">
+                    No pending matching items
+                  </div>
+                ) : (
+                  filteredItems.map(p => {
+                    const delay = differenceInCalendarDays(new Date(), parseDate(p.approvalNoteDate));
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => setSelectedId(p.id)}
+                        className={`w-full p-3.5 rounded-xl text-left border transition-all flex justify-between items-center h-[52px] ${selectedId === p.id ? 'bg-amber-600 border-amber-600 text-white shadow-lg shadow-amber-100' : 'bg-white border-slate-100 hover:border-amber-500 shadow-sm mb-2'}`}
+                      >
+                        <span className="font-bold text-sm truncate flex-1 min-w-0 pr-2">{p.itemDescription}</span>
+                        <div className={`text-[10px] font-bold px-2 py-1 rounded-lg flex items-center gap-1 shrink-0 ${selectedId === p.id ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                          <Clock size={10} />
+                          {delay}d
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
-          </div>
 
-          <div>
-            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Settled Payments</h3>
-            <div className="space-y-2 opacity-60">
-              {paidItems.map(p => (
-                <div key={p.id} className="bg-white border border-slate-100 p-3 rounded-xl flex items-center justify-between text-xs">
-                  <span className="font-medium truncate flex-1">{p.itemDescription}</span>
-                  <span className="text-emerald-600 font-bold whitespace-nowrap ml-2">₹{p.paymentAmount} paid</span>
-                </div>
-              ))}
+            <div>
+              <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Settled Payments</h3>
+              <div className="space-y-2 opacity-60">
+                {paidItems.map(p => (
+                  <div key={p.id} className="bg-white border border-slate-100 p-3 rounded-xl flex items-center justify-between text-xs mb-2">
+                    <span className="font-medium truncate flex-1">{p.itemDescription}</span>
+                    <span className="text-emerald-600 font-bold whitespace-nowrap ml-2">₹{p.paymentAmount} paid</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
