@@ -10,7 +10,8 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  updateProfile
 } from 'firebase/auth';
 import { initializeFirestore, doc, getDocFromServer, setDoc, serverTimestamp } from 'firebase/firestore';
 import firebaseConfigData from '../../firebase-applet-config.json';
@@ -60,6 +61,9 @@ export async function signUpWithEmail(email: string, pass: string, fullName: str
   try {
     const result = await createUserWithEmailAndPassword(auth, email, pass);
     const user = result.user;
+    
+    // Update profile with fullName
+    await updateProfile(user, { displayName: fullName });
     
     // Create a pending access request
     await setDoc(doc(db, 'access_requests', email.toLowerCase()), {

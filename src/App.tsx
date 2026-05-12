@@ -57,7 +57,7 @@ import {
   UserCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { format, differenceInDays } from 'date-fns';
+import { format, differenceInCalendarDays } from 'date-fns';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -583,18 +583,24 @@ export default function App() {
 
           <div className="pt-6 border-t border-slate-100">
             <div className="flex items-center gap-3 p-3 rounded-xl bg-white border border-slate-100 mb-4 shadow-sm">
-              <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center border border-emerald-200">
+              <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center border border-emerald-200 overflow-hidden">
                 {user.photoURL ? (
-                  <img src={user.photoURL} className="w-8 h-8 rounded-full" alt="" referrerPolicy="no-referrer" />
+                  <img src={user.photoURL} className="w-8 h-8 rounded-full object-cover" alt="" referrerPolicy="no-referrer" />
                 ) : (
-                  <UserIcon size={16} className="text-emerald-600" />
+                  <span className="text-[10px] font-bold text-emerald-700 uppercase">
+                    {(user.displayName || user.email || 'U').charAt(0)}
+                  </span>
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-bold text-slate-900 truncate tracking-tight">{user.displayName}</p>
+                <p className="text-sm font-bold text-slate-900 truncate tracking-tight">
+                  {user.displayName || user.email?.split('@')[0] || 'User'}
+                </p>
                 <div className="flex items-center gap-1.5">
                    <div className={`w-1.5 h-1.5 rounded-full ${isAdmin ? 'bg-indigo-500' : 'bg-emerald-500'}`} />
-                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{isAdmin ? 'Admin' : 'Requester'}</p>
+                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                     {isAdmin ? 'Admin' : (user.displayName ? 'Requester' : 'User')}
+                   </p>
                 </div>
               </div>
             </div>
@@ -2285,7 +2291,7 @@ function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { p
             </div>
           ) : (
             purchasedItems.map(p => {
-              const delay = differenceInDays(new Date(), parseDate(p.purchaseDate));
+              const delay = differenceInCalendarDays(new Date(), parseDate(p.purchaseDate));
               return (
                 <button
                   key={p.id}
@@ -2439,7 +2445,7 @@ function PaymentLedger({ procurements, sendNotification, adminUids, user }: { pr
                 </div>
               ) : (
                 approvedNotesItems.map(p => {
-                  const delay = differenceInDays(new Date(), parseDate(p.approvalNoteDate));
+                  const delay = differenceInCalendarDays(new Date(), parseDate(p.approvalNoteDate));
                   return (
                     <button
                       key={p.id}
