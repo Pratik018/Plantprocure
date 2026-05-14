@@ -31,11 +31,17 @@ export async function signIn() {
     const result = await signInWithPopup(auth, googleProvider);
     return result.user;
   } catch (error: any) {
+    if (error.code === 'auth/popup-closed-by-user') {
+      // User closed the popup, this is a normal action, so we just return null silently
+      return null;
+    }
+    
     console.error('Sign in error:', error);
+    
     if (error.code === 'auth/popup-blocked') {
       alert('The login popup was blocked. Please enable popups for this site or open the app in a new tab.');
-    } else if (error.code === 'auth/popup-closed-by-user') {
-      // Normal closure
+    } else if (error.code === 'auth/unauthorized-domain') {
+      alert(`The domain "${window.location.hostname}" is not authorized in the Firebase Console. \n\nPlease add it under Authentication > Settings > Authorized domains.`);
     } else if (error.message?.includes('Cross-Origin-Opener-Policy')) {
       alert('A security policy (COOP) blocked the login popup. Please try opening the app in a new tab using the button in the top right.');
     }
