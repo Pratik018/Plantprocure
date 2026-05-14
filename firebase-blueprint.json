@@ -63,12 +63,27 @@
         "isRead": { "type": "boolean" }
       },
       "required": ["senderId", "text", "chatId", "createdAt", "isAdminMessage", "isRead"]
+    },
+    "SystemSettings": {
+      "title": "System Settings",
+      "description": "Global configuration settings for the application.",
+      "type": "object",
+      "properties": {
+        "autoApproveRequests": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["autoApproveRequests"]
     }
   },
   "firestore": {
     "/notifications/{notificationId}": {
       "schema": "Notification",
       "description": "Collection of user notifications."
+    },
+    "/settings/{settingId}": {
+      "schema": "SystemSettings",
+      "description": "Global system configuration settings."
     },
     "/messages/{messageId}": {
       "schema": "ChatMessage",

@@ -37,6 +37,7 @@ export interface Procurement {
   purchaseRemarks?: string;
   purchaserName?: string;
   purchaserId?: string;
+  additionalItems?: { description: string, cost: number }[];
   
   // Approval Note fields
   approvalNoteNo?: string;

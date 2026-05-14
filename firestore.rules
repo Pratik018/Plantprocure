@@ -72,7 +72,18 @@ service cloud.firestore {
              (!('senderName' in data) || (data.senderName is string));
     }
 
+    function isValidSettings(data) {
+      return data.autoApproveRequests is bool &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp)) &&
+             (!('updatedBy' in data) || (data.updatedBy is string));
+    }
+
     // --- Collection Rules ---
+
+    match /settings/{settingId} {
+      allow read: if isAuthorized();
+      allow write: if isAdmin() && isValidSettings(incoming()) && isValidId(settingId);
+    }
 
     match /messages/{messageId} {
       allow list: if isAuthorized() && (isAdmin() || resource.data.chatId == request.auth.uid);
@@ -98,7 +109,7 @@ service cloud.firestore {
                       isValidId(procId) &&
                       isValidProcurement(incoming()) &&
                       incoming().userId == request.auth.uid &&
-                      incoming().status == 'REQUESTED' &&
+                      (incoming().status == 'REQUESTED' || incoming().status == 'APPROVED') &&
                       incoming().createdAt == request.time &&
                       incoming().keys().hasAll(['userId', 'userName', 'requestName', 'itemDescription', 'quantity', 'unit', 'estCost', 'purpose', 'priority', 'status', 'createdAt', 'updatedAt', 'requestDate']) &&
                       incoming().size() == 13;

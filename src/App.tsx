@@ -140,6 +140,7 @@ export default function App() {
   const [procurements, setProcurements] = useState<Procurement[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [adminUids, setAdminUids] = useState<string[]>([]);
+  const [systemSettings, setSystemSettings] = useState<{ autoApproveRequests: boolean }>({ autoApproveRequests: true });
 
   // Custom Alert/Confirm State
   const [dialog, setDialog] = useState<{
@@ -222,6 +223,27 @@ export default function App() {
       if (unsubscribeRequests) unsubscribeRequests();
     };
   }, [isAdmin]);
+
+  // Fetch System Settings
+  useEffect(() => {
+    if (!isAuthorized) return;
+    
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'system'), (snap) => {
+      if (snap.exists()) {
+        setSystemSettings({ autoApproveRequests: snap.data().autoApproveRequests });
+      } else {
+        // Initialize if not exists
+        if (isAdmin) {
+          setDoc(doc(db, 'settings', 'system'), {
+            autoApproveRequests: true,
+            updatedAt: serverTimestamp()
+          });
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [isAuthorized, isAdmin]);
 
   // Fetch all authorized users for management
   useEffect(() => {
@@ -575,13 +597,15 @@ export default function App() {
             />
             {isAdmin && (
               <>
-                <NavItem 
-                  active={activeTab === 'admin'} 
-                  onClick={() => { setActiveTab('admin'); setIsSidebarOpen(false); }}
-                  icon={<ShieldCheck size={18} />}
-                  label="Admin Review"
-                  badge={procurements.filter(p => p.status === 'REQUESTED' || p.status === 'PENDING').length}
-                />
+                {(!systemSettings.autoApproveRequests || procurements.filter(p => p.status === 'REQUESTED' || p.status === 'PENDING').length > 0) && (
+                  <NavItem 
+                    active={activeTab === 'admin'} 
+                    onClick={() => { setActiveTab('admin'); setIsSidebarOpen(false); }}
+                    icon={<ShieldCheck size={18} />}
+                    label="Admin Review"
+                    badge={procurements.filter(p => p.status === 'REQUESTED' || p.status === 'PENDING').length}
+                  />
+                )}
                 <NavItem 
                   active={activeTab === 'settings'} 
                   onClick={() => { setActiveTab('settings'); setIsSidebarOpen(false); }}
@@ -668,14 +692,14 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              {activeTab === 'dashboard' && <Dashboard procurements={procurements} setActiveTab={setActiveTab} isAdmin={isAdmin} />}
-              {activeTab === 'request' && <RequestForm user={user} showAlert={showAlert} sendNotification={sendNotification} adminUids={adminUids} />}
+              {activeTab === 'dashboard' && <Dashboard procurements={procurements} setActiveTab={setActiveTab} isAdmin={isAdmin} systemSettings={systemSettings} />}
+              {activeTab === 'request' && <RequestForm user={user} showAlert={showAlert} sendNotification={sendNotification} adminUids={adminUids} systemSettings={systemSettings} />}
               {activeTab === 'tracking' && <TrackingDashboard procurements={procurements} />}
               {activeTab === 'admin' && <AdminReview procurements={procurements} isAdmin={isAdmin} showAlert={showAlert} showConfirm={showConfirm} sendNotification={sendNotification} />}
               {activeTab === 'purchase' && <PurchaseEntry procurements={procurements} user={user} showAlert={showAlert} showConfirm={showConfirm} sendNotification={sendNotification} adminUids={adminUids} />}
               {activeTab === 'approval' && <ApprovalStatus procurements={procurements} sendNotification={sendNotification} adminUids={adminUids} user={user} />}
               {activeTab === 'ledger' && <PaymentLedger procurements={procurements} sendNotification={sendNotification} adminUids={adminUids} user={user} />}
-              {activeTab === 'settings' && isAdmin && <AdminManagement authorizedUsers={authorizedUsers} showAlert={showAlert} showConfirm={showConfirm} accessRequests={accessRequests} />}
+              {activeTab === 'settings' && isAdmin && <AdminManagement authorizedUsers={authorizedUsers} showAlert={showAlert} showConfirm={showConfirm} accessRequests={accessRequests} systemSettings={systemSettings} />}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -1183,7 +1207,7 @@ function NavItem({ active, onClick, icon, label, badge }: { active: boolean, onC
 
 // --- Tab Components ---
 
-function Dashboard({ procurements, setActiveTab, isAdmin }: { procurements: Procurement[], setActiveTab: any, isAdmin: boolean }) {
+function Dashboard({ procurements, setActiveTab, isAdmin, systemSettings }: { procurements: Procurement[], setActiveTab: any, isAdmin: boolean, systemSettings: { autoApproveRequests: boolean } }) {
   const stats = [
     { 
       label: 'Admin Review', 
@@ -1191,7 +1215,7 @@ function Dashboard({ procurements, setActiveTab, isAdmin }: { procurements: Proc
       icon: <ShieldCheck size={20} />,
       color: 'amber',
       tab: isAdmin ? 'admin' : 'tracking',
-      show: true
+      show: !systemSettings.autoApproveRequests || procurements.filter(p => p.status === 'REQUESTED' || p.status === 'PENDING').length > 0
     },
     { 
       label: 'Purchase Entry', 
@@ -1228,7 +1252,8 @@ function Dashboard({ procurements, setActiveTab, isAdmin }: { procurements: Proc
       const vendor = p.vendorName || 'Others';
       if (!acc[vendor]) acc[vendor] = { count: 0, amount: 0 };
       acc[vendor].count += 1;
-      acc[vendor].amount += (p.actualCost || 0);
+      const additionalTotal = p.additionalItems?.reduce((sum, item) => sum + item.cost, 0) || 0;
+      acc[vendor].amount += (p.actualCost || 0) + additionalTotal;
       return acc;
     }, {} as Record<string, { count: number, amount: number }>);
 
@@ -1368,7 +1393,7 @@ function Dashboard({ procurements, setActiveTab, isAdmin }: { procurements: Proc
   );
 }
 
-function RequestForm({ user, showAlert, sendNotification, adminUids }: { user: User, showAlert: (m: string, t?: string) => void, sendNotification: any, adminUids: string[] }) {
+function RequestForm({ user, showAlert, sendNotification, adminUids, systemSettings }: { user: User, showAlert: (m: string, t?: string) => void, sendNotification: any, adminUids: string[], systemSettings: { autoApproveRequests: boolean } }) {
   const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     requestName: user.displayName || '',
@@ -1389,18 +1414,21 @@ function RequestForm({ user, showAlert, sendNotification, adminUids }: { user: U
         userId: user.uid,
         userName: user.displayName,
         requestDate: new Date().toISOString(),
-        status: 'REQUESTED',
+        status: systemSettings.autoApproveRequests ? 'APPROVED' : 'REQUESTED',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
       
       // Notify all admins
+      const isAuto = systemSettings.autoApproveRequests;
       for (const adminUid of adminUids) {
         if (adminUid === user.uid) continue;
         await sendNotification(
           adminUid,
-          'New Procurement Request',
-          `${user.displayName} has submitted a new request for ${formData.itemDescription}.`,
+          isAuto ? 'New Purchase Item (Auto-Approved)' : 'New Procurement Request',
+          isAuto 
+            ? `${user.displayName} has submitted a new request for ${formData.itemDescription} which is now ready for purchase entry.`
+            : `${user.displayName} has submitted a new request for ${formData.itemDescription}.`,
           'NEW_REQUEST',
           docRef.id
         );
@@ -2250,6 +2278,30 @@ function TrackingDashboard({ procurements }: { procurements: Procurement[] }) {
                 {filtered.find(p => p.id === selectedId)!.actualCost && <DetailBox label="Actual" value={`₹${filtered.find(p => p.id === selectedId)!.actualCost}`} />}
               </div>
 
+              {/* Show Additional Items */}
+              {filtered.find(p => p.id === selectedId)!.additionalItems && filtered.find(p => p.id === selectedId)!.additionalItems!.length > 0 && (
+                <div className="bg-emerald-50/30 p-5 rounded-2xl border border-emerald-100/50">
+                  <p className="text-[10px] font-bold text-emerald-600/60 uppercase tracking-widest mb-3">Additional Items & Charges</p>
+                  <div className="space-y-2">
+                    {filtered.find(p => p.id === selectedId)!.additionalItems!.map((item, i) => (
+                      <div key={i} className="flex justify-between items-center text-sm">
+                        <span className="text-slate-600 font-medium">{item.description}</span>
+                        <span className="font-bold text-emerald-600">₹{item.cost.toLocaleString()}</span>
+                      </div>
+                    ))}
+                    <div className="pt-2 mt-2 border-t border-emerald-100 flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-400 uppercase">Total Procurement Value</span>
+                      <span className="text-lg font-black text-slate-900">
+                        ₹{(
+                          (filtered.find(p => p.id === selectedId)!.actualCost || 0) + 
+                          (filtered.find(p => p.id === selectedId)!.additionalItems?.reduce((s, ai) => s + ai.cost, 0) || 0)
+                        ).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-4">
                 <div>
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Purpose</p>
@@ -2339,8 +2391,8 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
   sendNotification: any,
   adminUids: string[]
 }) {
-  const approvedItems = procurements.filter(p => p.status === 'APPROVED')
-    .sort((a, b) => parseDate(a.requestDate).getTime() - parseDate(b.requestDate).getTime());
+  const approvedItems = React.useMemo(() => procurements.filter(p => p.status === 'APPROVED')
+    .sort((a, b) => parseDate(a.requestDate).getTime() - parseDate(b.requestDate).getTime()), [procurements]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -2350,7 +2402,8 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
     vendorName: '',
     actualCost: 0,
     invoiceNumber: '',
-    purchaseRemarks: ''
+    purchaseRemarks: '',
+    additionalItems: [] as { description: string, cost: number }[]
   });
 
   const [itemCosts, setItemCosts] = useState<Record<string, number>>({});
@@ -2358,12 +2411,19 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
   useEffect(() => {
     if (selectedId) {
       const item = approvedItems.find(p => p.id === selectedId);
-      setFormData({
-        purchaseDate: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
-        vendorName: '',
-        actualCost: item?.estCost || 0,
-        invoiceNumber: '',
-        purchaseRemarks: ''
+      setFormData(prev => {
+        // Prevent update if same item is selected unless we need to reset
+        const actualCost = item?.estCost || 0;
+        if (prev.actualCost === actualCost && prev.vendorName === '' && prev.invoiceNumber === '' && prev.additionalItems.length === 0) return prev;
+        
+        return {
+          purchaseDate: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
+          vendorName: '',
+          actualCost: actualCost,
+          invoiceNumber: '',
+          purchaseRemarks: '',
+          additionalItems: []
+        };
       });
       setIsOtherVendor(false);
     }
@@ -2444,6 +2504,7 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
             purchaseRemarks: formData.purchaseRemarks,
             purchaserName: user?.displayName || 'Unknown',
             purchaserId: user?.uid,
+            additionalItems: formData.additionalItems,
             status: 'PURCHASED' as ProcurementStatus,
             updatedAt: serverTimestamp()
           });
@@ -2472,7 +2533,8 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
           vendorName: '',
           actualCost: 0,
           invoiceNumber: '',
-          purchaseRemarks: ''
+          purchaseRemarks: '',
+          additionalItems: []
         });
       } catch (error: any) {
         console.error('Purchase Submission Error:', error);
@@ -2656,6 +2718,81 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
                     <FormField label="Actual Cost" type="number" value={formData.actualCost} onChange={(v: any) => setFormData({...formData, actualCost: parseFloat(v) || 0})} required />
                   )}
                   <FormField label="Invoice Number" value={formData.invoiceNumber} onChange={v => setFormData({...formData, invoiceNumber: v})} required />
+                  
+                  {/* Additional Items Section */}
+                  <div className="md:col-span-2 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <Plus size={14} className="text-emerald-600" />
+                        Additional Items / Charges
+                      </h4>
+                      <button 
+                        type="button"
+                        onClick={() => setFormData({
+                          ...formData, 
+                          additionalItems: [...formData.additionalItems, { description: '', cost: 0 }]
+                        })}
+                        className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700 uppercase tracking-wider"
+                      >
+                        + Add Row
+                      </button>
+                    </div>
+                    {formData.additionalItems.length > 0 ? (
+                      <div className="space-y-2">
+                        {formData.additionalItems.map((item, idx) => (
+                          <div key={idx} className="flex items-center gap-3 bg-slate-50 p-2 rounded-xl border border-slate-100">
+                            <input 
+                              type="text"
+                              placeholder="Description (e.g. Shipping, Tax, Connector)"
+                              className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-emerald-500"
+                              value={item.description}
+                              onChange={(e) => {
+                                const newItems = [...formData.additionalItems];
+                                newItems[idx].description = e.target.value;
+                                setFormData({ ...formData, additionalItems: newItems });
+                              }}
+                              required
+                            />
+                            <div className="relative w-32">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">₹</span>
+                              <input 
+                                type="number"
+                                placeholder="Cost"
+                                className="w-full bg-white border border-slate-200 rounded-lg pl-5 pr-2 py-2 text-xs font-bold outline-none focus:ring-1 focus:ring-emerald-500"
+                                value={item.cost || ''}
+                                onChange={(e) => {
+                                  const newItems = [...formData.additionalItems];
+                                  newItems[idx].cost = parseFloat(e.target.value) || 0;
+                                  setFormData({ ...formData, additionalItems: newItems });
+                                }}
+                                required
+                              />
+                            </div>
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                const newItems = formData.additionalItems.filter((_, i) => i !== idx);
+                                setFormData({ ...formData, additionalItems: newItems });
+                              }}
+                              className="p-2 text-slate-400 hover:text-rose-500 transition-colors"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                        <div className="flex justify-end pr-10">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">
+                            Additional Total: <span className="text-slate-900 ml-1">₹{formData.additionalItems.reduce((sum, item) => sum + item.cost, 0).toLocaleString()}</span>
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-4 border border-dashed border-slate-200 rounded-2xl text-[10px] text-slate-400 uppercase tracking-widest bg-slate-50/50">
+                        No additional charges added
+                      </div>
+                    )}
+                  </div>
+
                   <div className="md:col-span-2">
                     <FormField label="Purchase Remarks" type="textarea" value={formData.purchaseRemarks} onChange={v => setFormData({...formData, purchaseRemarks: v})} required />
                   </div>
@@ -2916,6 +3053,30 @@ function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { p
                       <DetailBox label="Actual Cost" value={`₹${purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.actualCost}`} />
                       <DetailBox label="Invoice" value={purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.invoiceNumber} />
                     </div>
+
+                    {/* Show Additional Items */}
+                    {purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.additionalItems && purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))!.additionalItems!.length > 0 && (
+                      <div className="mt-4 bg-white p-3 rounded-xl border border-slate-200">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Additional Charges</p>
+                        <div className="space-y-1">
+                          {purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))!.additionalItems!.map((item, i) => (
+                            <div key={i} className="flex justify-between items-center text-xs">
+                              <span className="text-slate-600">{item.description}</span>
+                              <span className="font-bold text-emerald-600">₹{item.cost.toLocaleString()}</span>
+                            </div>
+                          ))}
+                          <div className="pt-1 mt-1 border-t border-slate-100 flex justify-between items-center">
+                            <span className="text-[10px] font-black text-slate-400 uppercase">Total Bill</span>
+                            <span className="text-sm font-black text-slate-900">
+                              ₹{(
+                                (purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.actualCost || 0) + 
+                                (purchasedItems.find(p => p.id === (selectedIds[0] || selectedId))?.additionalItems?.reduce((s, ai) => s + ai.cost, 0) || 0)
+                              ).toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <div className="mt-4 p-4 bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 max-h-40 overflow-y-auto">
@@ -2968,15 +3129,29 @@ function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { p
 }
 
 function PaymentLedger({ procurements, sendNotification, adminUids, user }: { procurements: Procurement[], sendNotification: any, adminUids: string[], user: User | null }) {
-  const approvedNotesItems = procurements.filter(p => p.status === 'NOTE_APPROVED')
-    .sort((a, b) => parseDate(a.approvalNoteDate).getTime() - parseDate(b.approvalNoteDate).getTime());
-  const paidItems = procurements.filter(p => p.status === 'PAYMENT_DONE');
+  const approvedNotesItems = React.useMemo(() => procurements.filter(p => p.status === 'NOTE_APPROVED')
+    .sort((a, b) => parseDate(a.approvalNoteDate).getTime() - parseDate(b.approvalNoteDate).getTime()), [procurements]);
+  const paidItems = React.useMemo(() => procurements.filter(p => p.status === 'PAYMENT_DONE'), [procurements]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     paymentDate: format(new Date(), "yyyy-MM-dd"),
     paymentAmount: 0
   });
+
+  useEffect(() => {
+    if (selectedId) {
+      const p = approvedNotesItems.find(item => item.id === selectedId);
+      if (p) {
+        const additionalTotal = p.additionalItems?.reduce((sum, item) => sum + item.cost, 0) || 0;
+        const total = (p.actualCost || 0) + additionalTotal;
+        setFormData(prev => {
+          if (prev.paymentAmount === total) return prev;
+          return { ...prev, paymentAmount: total };
+        });
+      }
+    }
+  }, [selectedId, approvedNotesItems]);
 
   // Filters
   const [dateFilter, setDateFilter] = useState('');
@@ -3126,12 +3301,18 @@ function PaymentLedger({ procurements, sendNotification, adminUids, user }: { pr
             </div>
 
             <div>
-              <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Settled Payments</h3>
-              <div className="space-y-2 opacity-60">
+              <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4 px-1">Settled Payments</h3>
+              <div className="space-y-3">
                 {paidItems.map(p => (
-                  <div key={p.id} className="bg-white border border-slate-100 p-3 rounded-xl flex items-center justify-between text-xs mb-2">
-                    <span className="font-medium truncate flex-1">{p.itemDescription}</span>
-                    <span className="text-emerald-600 font-bold whitespace-nowrap ml-2">₹{p.paymentAmount} paid</span>
+                  <div key={p.id} className="bg-white border border-slate-100 p-4 rounded-xl flex items-center justify-between shadow-sm">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-sm text-slate-900 truncate">{p.itemDescription}</p>
+                      <p className="text-[10px] text-slate-400 uppercase tracking-tight">{p.vendorName} • {p.paymentDate ? format(parseDate(p.paymentDate), 'MMM d, yyyy') : 'N/A'}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-black text-emerald-600">₹{p.paymentAmount?.toLocaleString()}</p>
+                      <p className="text-[9px] font-bold text-slate-300 uppercase">Paid</p>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3148,29 +3329,34 @@ function PaymentLedger({ procurements, sendNotification, adminUids, user }: { pr
             >
               <div className="p-8 border-b border-slate-100 bg-slate-50">
                 <h3 className="font-bold text-lg text-slate-900">Complete Payment for:</h3>
-                <p className="text-amber-600 font-medium">{approvedNotesItems.find(p => p.id === selectedId)?.itemDescription}</p>
-                <div className="mt-4 grid grid-cols-2 lg:grid-cols-5 gap-2">
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <p className="text-[10px] text-slate-400 uppercase">Requester</p>
-                    <p className="text-xs font-bold truncate">{approvedNotesItems.find(p => p.id === selectedId)?.requestName || approvedNotesItems.find(p => p.id === selectedId)?.userName}</p>
-                  </div>
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <p className="text-[10px] text-slate-400 uppercase">Vendor</p>
-                    <p className="text-xs font-bold truncate">{approvedNotesItems.find(p => p.id === selectedId)?.vendorName}</p>
-                  </div>
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <p className="text-[10px] text-slate-400 uppercase">Actual Cost</p>
-                    <p className="text-xs font-bold truncate">₹{approvedNotesItems.find(p => p.id === selectedId)?.actualCost}</p>
-                  </div>
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <p className="text-[10px] text-slate-400 uppercase">Approval No</p>
-                    <p className="text-xs font-bold truncate">{approvedNotesItems.find(p => p.id === selectedId)?.approvalNoteNo}</p>
-                  </div>
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <p className="text-[10px] text-slate-400 uppercase">Purchaser</p>
-                    <p className="text-xs font-bold truncate">{approvedNotesItems.find(p => p.id === selectedId)?.purchaserName || 'N/A'}</p>
-                  </div>
+                <p className="text-amber-600 font-medium mb-4">{approvedNotesItems.find(p => p.id === selectedId)?.itemDescription}</p>
+                
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-6">
+                  <DetailBox label="Requester" value={approvedNotesItems.find(p => p.id === selectedId)?.requestName || approvedNotesItems.find(p => p.id === selectedId)?.userName} />
+                  <DetailBox label="Vendor" value={approvedNotesItems.find(p => p.id === selectedId)?.vendorName} />
+                  <DetailBox label="Base Cost" value={`₹${approvedNotesItems.find(p => p.id === selectedId)?.actualCost}`} />
+                  <DetailBox label="Approval No" value={approvedNotesItems.find(p => p.id === selectedId)?.approvalNoteNo} />
+                  <DetailBox label="Total Total" value={`₹${((approvedNotesItems.find(p => p.id === selectedId)?.actualCost || 0) + (approvedNotesItems.find(p => p.id === selectedId)?.additionalItems?.reduce((s, ai) => s + ai.cost, 0) || 0)).toLocaleString()}`} />
                 </div>
+
+                {/* Show Additional Items Breakdown */}
+                {approvedNotesItems.find(p => p.id === selectedId)?.additionalItems && approvedNotesItems.find(p => p.id === selectedId)!.additionalItems!.length > 0 && (
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Cost Breakdown</p>
+                    <div className="space-y-2">
+                       <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-500 italic">Bill Amount (Actual Cost)</span>
+                        <span className="font-bold text-slate-700">₹{(approvedNotesItems.find(p => p.id === selectedId)?.actualCost || 0).toLocaleString()}</span>
+                      </div>
+                      {approvedNotesItems.find(p => p.id === selectedId)!.additionalItems!.map((item, i) => (
+                        <div key={i} className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500 italic">{item.description}</span>
+                          <span className="font-bold text-emerald-600">+ ₹{item.cost.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
               <form onSubmit={handleSubmit} className="p-8 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -3350,15 +3536,30 @@ const AdminCard: React.FC<{
   );
 };
 
-function AdminManagement({ authorizedUsers, showAlert, showConfirm, accessRequests }: { 
+function AdminManagement({ authorizedUsers, showAlert, showConfirm, accessRequests, systemSettings }: { 
   authorizedUsers: {id: string, email: string, role?: 'USER' | 'ADMIN'}[],
   showAlert: (m: string, t?: string) => void,
   showConfirm: (m: string, oc: () => void, t?: string) => void,
-  accessRequests: any[]
+  accessRequests: any[],
+  systemSettings: { autoApproveRequests: boolean }
 }) {
   const [allUsers, setAllUsers] = useState<{uid: string, email: string, displayName: string}[]>([]);
   const [loading, setLoading] = useState(true);
   const [newAuthEmail, setNewAuthEmail] = useState('');
+
+  const toggleAutoApproval = async () => {
+    const newValue = !systemSettings.autoApproveRequests;
+    try {
+      await setDoc(doc(db, 'settings', 'system'), {
+        autoApproveRequests: newValue,
+        updatedAt: serverTimestamp(),
+        updatedBy: auth.currentUser?.email
+      }, { merge: true });
+      showAlert(`Auto-Approval has been ${newValue ? 'Enabled' : 'Disabled'}.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'settings/system');
+    }
+  };
 
   useEffect(() => {
     const qUsers = query(collection(db, 'users'), orderBy('email'));
@@ -3489,6 +3690,50 @@ function AdminManagement({ authorizedUsers, showAlert, showConfirm, accessReques
 
   return (
     <div className="space-y-8">
+      {/* System Configuration */}
+      <section className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-6 border-b border-slate-50 flex items-center gap-3">
+          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
+            <Settings size={20} />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">System Configuration</h2>
+            <p className="text-xs text-slate-500 font-medium tracking-tight">Manage global application behaviors.</p>
+          </div>
+        </div>
+        <div className="p-6">
+          <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+            <div className="flex items-center gap-4">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${systemSettings.autoApproveRequests ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
+                {systemSettings.autoApproveRequests ? <CheckCircle2 size={20} /> : <Clock size={20} />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-slate-900 text-sm">Auto-Approve Requests</p>
+                <p className="text-xs text-slate-500">
+                  {systemSettings.autoApproveRequests 
+                    ? "New requests bypass 'Admin Review' and go straight to 'Purchase Entry'." 
+                    : "New requests require manual approval in the 'Admin Review' section."}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={toggleAutoApproval}
+              className={`
+                relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none 
+                ${systemSettings.autoApproveRequests ? 'bg-emerald-600' : 'bg-slate-300'}
+              `}
+            >
+              <span
+                className={`
+                  inline-block h-4 w-4 transform rounded-full bg-white transition-transform
+                  ${systemSettings.autoApproveRequests ? 'translate-x-6' : 'translate-x-1'}
+                `}
+              />
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Pending Access Requests */}
       {accessRequests.length > 0 && (
         <div className="bg-amber-50 rounded-2xl shadow-sm border border-amber-200 overflow-hidden">
