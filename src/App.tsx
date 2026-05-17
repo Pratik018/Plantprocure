@@ -68,7 +68,22 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { utils, writeFile } from 'xlsx';
 
-import { auth, db, signIn, signOut, handleFirestoreError, OperationType, signInWithEmail, signUpWithEmail } from './lib/firebase';
+import { 
+  auth, 
+  db, 
+  signIn, 
+  signOut, 
+  handleFirestoreError, 
+  OperationType, 
+  signInWithEmail, 
+  signUpWithEmail,
+  encryptProcurement,
+  decryptProcurement,
+  encryptMessage,
+  decryptMessage,
+  encrypt,
+  decrypt
+} from './lib/firebase';
 import { Procurement, ProcurementStatus } from './types';
 
 type NotificationType = 'STATUS_CHANGE' | 'NEW_REQUEST' | 'INFO';
@@ -312,7 +327,7 @@ export default function App() {
     const q = query(collection(db, 'procurements'), orderBy('createdAt', 'desc'));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
+      const data = snapshot.docs.map(doc => decryptProcurement({
         id: doc.id,
         ...doc.data()
       })) as Procurement[];
@@ -642,7 +657,7 @@ export default function App() {
             <div className="flex items-center gap-3 p-3 rounded-xl bg-white border border-slate-100 mb-4 shadow-sm">
               <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center border border-emerald-200 overflow-hidden">
                 {user.photoURL ? (
-                  <img src={user.photoURL} className="w-8 h-8 rounded-full object-cover" alt="" referrerPolicy="no-referrer" />
+                  <img src={user.photoURL} className="w-8 h-8 rounded-full object-cover" alt={user.displayName || 'User profile'} referrerPolicy="no-referrer" />
                 ) : (
                   <span className="text-[10px] font-bold text-emerald-700 uppercase">
                     {(user.displayName || user.email || 'U').charAt(0)}
@@ -880,7 +895,7 @@ function ChatMessenger({ user, isAdmin, showAlert, showConfirm }: { user: User, 
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message)));
+      setMessages(snapshot.docs.map(doc => decryptMessage({ id: doc.id, ...doc.data() }) as Message));
     });
 
     return () => unsubscribe();
@@ -969,7 +984,7 @@ function ChatMessenger({ user, isAdmin, showAlert, showConfirm }: { user: User, 
     setNewMessage('');
 
     try {
-      await addDoc(collection(db, 'messages'), {
+      const messageData = encryptMessage({
         senderId: user.uid,
         senderEmail: user.email,
         senderName: user.displayName,
@@ -979,6 +994,7 @@ function ChatMessenger({ user, isAdmin, showAlert, showConfirm }: { user: User, 
         isRead: false,
         createdAt: serverTimestamp()
       });
+      await addDoc(collection(db, 'messages'), messageData);
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'messages');
     }
@@ -1409,7 +1425,7 @@ function RequestForm({ user, showAlert, sendNotification, adminUids, systemSetti
     e.preventDefault();
     setSubmitting(true);
     try {
-      const docRef = await addDoc(collection(db, 'procurements'), {
+      const procurementData = encryptProcurement({
         ...formData,
         userId: user.uid,
         userName: user.displayName,
@@ -1418,6 +1434,7 @@ function RequestForm({ user, showAlert, sendNotification, adminUids, systemSetti
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+      const docRef = await addDoc(collection(db, 'procurements'), procurementData);
       
       // Notify all admins
       const isAuto = systemSettings.autoApproveRequests;
@@ -1680,11 +1697,12 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
     setUpdating(id);
     try {
       const p = procurements.find(item => item.id === id);
-      await updateDoc(doc(db, 'procurements', id), {
+      const updateData = encryptProcurement({
         status,
         adminRemarks: remarks,
         updatedAt: serverTimestamp()
       });
+      await updateDoc(doc(db, 'procurements', id), updateData);
 
       if (p) {
         await sendNotification(
@@ -1710,11 +1728,12 @@ function AdminReview({ procurements, isAdmin, showAlert, showConfirm, sendNotifi
       try {
         const batch = writeBatch(db);
         selectedIds.forEach(id => {
-          batch.update(doc(db, 'procurements', id), {
+          const updateData = encryptProcurement({
             status,
             adminRemarks: bulkRemarks,
             updatedAt: serverTimestamp()
           });
+          batch.update(doc(db, 'procurements', id), updateData);
         });
         await batch.commit();
 
@@ -2496,7 +2515,7 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
           const item = approvedItems.find(p => p.id === id);
           const cost = selectedIds.length > 1 ? (itemCosts[id] || 0) : Number(formData.actualCost);
           
-          batch.update(doc(db, 'procurements', id), {
+          const updateData = encryptProcurement({
             purchaseDate: formData.purchaseDate,
             vendorName: formData.vendorName,
             actualCost: cost,
@@ -2508,6 +2527,8 @@ function PurchaseEntry({ procurements, user, showAlert, showConfirm, sendNotific
             status: 'PURCHASED' as ProcurementStatus,
             updatedAt: serverTimestamp()
           });
+          
+          batch.update(doc(db, 'procurements', id), updateData);
 
           if (user && item) {
             for (const adminUid of adminUids) {
@@ -2884,11 +2905,12 @@ function ApprovalStatus({ procurements, sendNotification, adminUids, user }: { p
       
       for (const id of idsToUpdate) {
         const p = purchasedItems.find(item => item.id === id);
-        batch.update(doc(db, 'procurements', id), {
+        const updateData = encryptProcurement({
           ...formData,
           status: 'NOTE_APPROVED',
           updatedAt: serverTimestamp()
         });
+        batch.update(doc(db, 'procurements', id), updateData);
 
         // Queue notifications
         if (p) {
@@ -3181,11 +3203,12 @@ function PaymentLedger({ procurements, sendNotification, adminUids, user }: { pr
     setSubmitting(true);
     try {
       const p = approvedNotesItems.find(item => item.id === selectedId);
-      await updateDoc(doc(db, 'procurements', selectedId), {
+      const updateData = encryptProcurement({
         ...formData,
         status: 'PAYMENT_DONE',
         updatedAt: serverTimestamp()
       });
+      await updateDoc(doc(db, 'procurements', selectedId), updateData);
 
       // Notify User and Admin
       if (p) {

@@ -1,6 +1,8 @@
 {
   "name": "PlantProcure Ledger",
-  "description": "A comprehensive mult-stage plant procurement management system with request approvals, purchase tracking, and payment ledgering.",
+  "description": "Full-stack procurement lifecycle tracker. Manage requests, approvals, purchase orders, and payment ledgers with real-time updates and admin controls.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

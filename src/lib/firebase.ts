@@ -4,6 +4,7 @@
  */
 
 import { initializeApp } from 'firebase/app';
+import CryptoJS from 'crypto-js';
 import { 
   getAuth, 
   GoogleAuthProvider, 
@@ -139,4 +140,134 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
+}
+
+// --- Encryption Utilities ---
+const ENCRYPTION_KEY = (import.meta as any).env.VITE_ENCRYPTION_KEY || 'plant-procure-ledger-default-secret';
+
+/**
+ * Encrypts a string using AES.
+ */
+export function encrypt(text: any): any {
+  if (text === null || text === undefined) return text;
+  
+  // If it's an object, stringify it first
+  const stringToEncrypt = typeof text === 'object' ? JSON.stringify(text) : String(text);
+  
+  try {
+    return `__ENC__${CryptoJS.AES.encrypt(stringToEncrypt, ENCRYPTION_KEY).toString()}`;
+  } catch (e) {
+    console.error("Encryption failed:", e);
+    return text;
+  }
+}
+
+/**
+ * Decrypts a string using AES. Returns original if not encrypted or decryption fails.
+ */
+export function decrypt(cipherText: any): any {
+  if (typeof cipherText !== 'string' || !cipherText.startsWith('__ENC__')) {
+    return cipherText;
+  }
+
+  const actualCipher = cipherText.substring(7); // Remove __ENC__ prefix
+
+  try {
+    const bytes = CryptoJS.AES.decrypt(actualCipher, ENCRYPTION_KEY);
+    const decryptedData = bytes.toString(CryptoJS.enc.Utf8);
+    
+    if (!decryptedData) return cipherText; // Decryption failed or resulted in empty string
+
+    // Try to parse as JSON if it looks like an object/array
+    if ((decryptedData.startsWith('{') && decryptedData.endsWith('}')) || 
+        (decryptedData.startsWith('[') && decryptedData.endsWith(']'))) {
+      try {
+        return JSON.parse(decryptedData);
+      } catch {
+        return decryptedData;
+      }
+    }
+    
+    return decryptedData;
+  } catch (e) {
+    return cipherText;
+  }
+}
+
+/**
+ * Encrypts sensitive fields in a procurement object for storage.
+ */
+export function encryptProcurement(data: any): any {
+  const encrypted = { ...data };
+  const fieldsToEncrypt = [
+    'userName', 
+    'requestName', 
+    'itemDescription', 
+    'purpose', 
+    'adminRemarks', 
+    'vendorName', 
+    'invoiceNumber', 
+    'purchaseRemarks', 
+    'purchaserName', 
+    'approvalNoteNo',
+    'additionalItems'
+  ];
+
+  fieldsToEncrypt.forEach(field => {
+    if (encrypted[field] !== undefined) {
+      encrypted[field] = encrypt(encrypted[field]);
+    }
+  });
+
+  return encrypted;
+}
+
+/**
+ * Decrypts sensitive fields in a procurement object for display.
+ */
+export function decryptProcurement(data: any): any {
+  const decrypted = { ...data };
+  const fieldsToDecrypt = [
+    'userName', 
+    'requestName', 
+    'itemDescription', 
+    'purpose', 
+    'adminRemarks', 
+    'vendorName', 
+    'invoiceNumber', 
+    'purchaseRemarks', 
+    'purchaserName', 
+    'approvalNoteNo',
+    'additionalItems'
+  ];
+
+  fieldsToDecrypt.forEach(field => {
+    if (decrypted[field] !== undefined) {
+      decrypted[field] = decrypt(decrypted[field]);
+    }
+  });
+
+  return decrypted;
+}
+
+/**
+ * Encrypts a message object.
+ */
+export function encryptMessage(data: any): any {
+  const encrypted = { ...data };
+  if (encrypted.text !== undefined) {
+    encrypted.text = encrypt(encrypted.text);
+  }
+  return encrypted;
+}
+
+/**
+ * Decrypts a message object.
+ */
+export function decryptMessage(data: any): any {
+  const decrypted = { ...data };
+  if (decrypted.text !== undefined) {
+    decrypted.text = decrypt(decrypted.text);
+  }
+  return decrypted;
 }
