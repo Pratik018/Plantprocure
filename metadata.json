@@ -1,6 +1,6 @@
 {
   "name": "PlantProcure Ledger",
-  "description": "Full-stack procurement lifecycle tracker. Manage requests, approvals, purchase orders, and payment ledgers with real-time updates and admin controls.",
+  "description": "Professional procurement lifecycle tracker for Kusmunda Plant. Manage requests, approvals, purchase orders, and payment ledgers with real-time updates.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
